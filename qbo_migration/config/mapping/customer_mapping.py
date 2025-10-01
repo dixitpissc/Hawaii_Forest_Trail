@@ -31,8 +31,11 @@ CUSTOMER_COLUMN_MAPPING = {
     "ShipAddr.City": "ShipAddr.City",
     "ShipAddr.Country": "ShipAddr.Country",
     "ShipAddr.CountrySubDivisionCode": "ShipAddr.CountrySubDivisionCode",
-    "ShipAddr.PostalCode": "ShipAddr.PostalCode"
+    "ShipAddr.PostalCode": "ShipAddr.PostalCode",
     # PaymentMethodRef.value will be added dynamically in the payload based on mapping
+
+    # Parent Reference
+    "ParentRef.value" : "ParentRef.value"
 }
 
 
