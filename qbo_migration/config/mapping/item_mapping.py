@@ -31,6 +31,9 @@ ITEM_COLUMN_MAPPING = {
     "ParentRef.value": "ParentRef.value",
     # "ParentRef.name":  "ParentRef.name",
 
+    # Class ref 
+    "ClassRef.value" : "ClassRef.value"
+    
     # Read-only we still replicate to Map_Item (do NOT POST)
     # "FullyQualifiedName": "FullyQualifiedName",
     # "domain": "domain",
@@ -61,7 +64,7 @@ ITEM_POST_ALLOWLIST = {
     "InvStartDate", "SubItem",
     # nested refs (value-only)
     "IncomeAccountRef.value", "ExpenseAccountRef.value", "AssetAccountRef.value",
-    "ParentRef.value",
+    "ParentRef.value", "ClassRef.value",
 }
 
 

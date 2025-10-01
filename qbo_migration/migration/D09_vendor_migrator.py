@@ -12,6 +12,7 @@ Phase : 02 - Multi User
 
 import os
 import requests
+import requests.adapters
 import pandas as pd
 from dotenv import load_dotenv
 from storage.sqlserver import sql
@@ -187,7 +188,7 @@ def enrich_mapping_with_targets():
 
         payload["Active"] = True  # ✅ Always set Vendor as active
 
-        row["Payload_JSON"] = json.dumps(payload)
+        row["Payload_JSON"] = json.dumps(payload,indent=2)
         payloads.append(row)
 
     df_result = pd.DataFrame(payloads).where(pd.notnull, None)
@@ -197,7 +198,7 @@ def enrich_mapping_with_targets():
 
 def vendor_exists(display_name, query_url, headers):
     """
-    Checks if a vendor already exists in QBO by querying on DisplayName.
+    Optimized check if a vendor already exists in QBO by querying on DisplayName.
     Args:
         display_name (str): The display name of the vendor to search for.
         query_url (str): The QBO query API endpoint.
@@ -205,107 +206,159 @@ def vendor_exists(display_name, query_url, headers):
     Returns:
         str or None: QBO Vendor Id if found, else None.
     """
-    query = f"SELECT Id FROM Vendor WHERE DisplayName = '{display_name.replace("'", "''")}'"
-    response = requests.post(query_url, headers=headers, data=json.dumps({"query": query}))
-    if response.status_code == 200:
-        vendors = response.json().get("QueryResponse", {}).get("Vendor", [])
-        if vendors:
-            return vendors[0]["Id"]
+    try:
+        # Escape single quotes properly for SQL query
+        escaped_name = display_name.replace("'", "''")
+        query = f"SELECT Id FROM Vendor WHERE DisplayName = '{escaped_name}'"
+        
+        response = session.post(
+            query_url, 
+            headers=headers, 
+            data=json.dumps({"query": query}),
+            timeout=15  # Shorter timeout for existence checks
+        )
+        
+        if response.status_code == 200:
+            vendors = response.json().get("QueryResponse", {}).get("Vendor", [])
+            if vendors:
+                return vendors[0]["Id"]
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, Exception):
+        # Return None if query fails - let the main post handle the duplicate detection
+        logger.warning(f"Vendor existence check failed for: {display_name}")
+        return None
+    
     return None
 
+# Optimized session with connection pooling and timeout settings
 session = requests.Session()
+session.timeout = 30  # 30 second timeout for all requests
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=10,
+    pool_maxsize=10,
+    max_retries=0  # We handle retries manually
+)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
 
-def post_vendor(row):
+def post_vendor(row, auth_cache=None):
     """
-    Attempts to post a single vendor record to QBO.
+    Optimized version: Attempts to post a single vendor record to QBO.
     Args:
         row (pd.Series): A single record from the mapping table representing the vendor.
+        auth_cache (tuple): Cached auth credentials (post_url, query_url, headers) to avoid repeated calls
     Process:
         - Checks if vendor already migrated (Success or Exists)
         - Skips if retry limit is reached
-        - If duplicate vendor exists, attempts to recover QBO Id via:
-            a) Pre-check with vendor_exists()
-            b) Fallback using regex extraction from QBO error response
-        - Posts to QBO if no match found
-        - Updates Map_Vendor table with Target_Id, status, and error handling results
+        - Optimized duplicate checking with minimal QBO API calls
+        - Posts to QBO with enhanced error handling
+        - Batch-friendly database updates
     """
     source_id = row["Source_Id"]
+    
+    # Skip already processed records
     if pd.notna(row["Target_Id"]) and row["Porter_Status"] in ["Success", "Exists"]:
-        logger.info(f"Already migrated or exists: {source_id}")
-        return
+        return {"status": "skipped", "reason": "already_processed"}
 
+    # Skip retry limit exceeded
     if int(row.get("Retry_Count", 0)) >= max_retries:
-        logger.warning(f"Skipping {source_id} — Retry limit reached")
-        return
+        return {"status": "skipped", "reason": "retry_limit_exceeded"}
 
-    post_url, query_url, headers = get_qbo_auth()
-    display_name = row.get("DisplayName", source_id)
-
-    # Check for duplicate
-    existing_id = vendor_exists(display_name, query_url, headers)
-    if existing_id:
-        logger.warning(f"Vendor already exists in QBO: {display_name} → {existing_id}")
-        sql.run_query(f"""
-            UPDATE [{mapping_schema}].[{mapping_table}]
-            SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL
-            WHERE Source_Id = ?
-        """, (existing_id, source_id))
-        return
-
+    # Use cached auth or get fresh auth
+    if auth_cache:
+        post_url, query_url, headers = auth_cache
+    else:
+        post_url, query_url, headers = get_qbo_auth()
+    
+    display_name = row.get("DisplayName", str(source_id))
     payload_json = row.get("Payload_JSON")
+    
+    # Optimized approach: Try to post first, handle duplicates in error response
     try:
         response = session.post(post_url, headers=headers, data=payload_json)
+        
         if response.status_code == 200:
             qbo_id = response.json()["Vendor"]["Id"]
-            logger.info(f"✅ Migrated: {display_name} → {qbo_id}")
+            # Update database with success status
             sql.run_query(f"""
                 UPDATE [{mapping_schema}].[{mapping_table}]
                 SET Target_Id = ?, Porter_Status = 'Success', Failure_Reason = NULL
                 WHERE Source_Id = ?
             """, (qbo_id, source_id))
+            return {"status": "success", "qbo_id": qbo_id, "source_id": source_id}
 
         else:
             reason = response.text[:300]
-            if "Duplicate Name Exists" in reason or "duplicate name exists" in reason.lower():
-                # Extract QBO ID directly from the error message
+            
+            # Handle duplicate vendor case
+            if "duplicate name exists" in reason.lower() or "Duplicate Name Exists" in reason:
+                # Try to extract QBO ID from error message first
                 match = re.search(r"Id=(\d+)", reason)
                 if match:
                     existing_id = match.group(1)
-                    logger.warning(f"🔁 Vendor already exists — recovered ID from error message: {existing_id}")
                     sql.run_query(f"""
                         UPDATE [{mapping_schema}].[{mapping_table}]
                         SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL
                         WHERE Source_Id = ?
                     """, (existing_id, source_id))
-                    return
+                    return {"status": "exists", "qbo_id": existing_id, "source_id": source_id}
+                
+                # Fallback: Query QBO for existing vendor
+                existing_id = vendor_exists(display_name, query_url, headers)
+                if existing_id:
+                    sql.run_query(f"""
+                        UPDATE [{mapping_schema}].[{mapping_table}]
+                        SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL
+                        WHERE Source_Id = ?
+                    """, (existing_id, source_id))
+                    return {"status": "exists", "qbo_id": existing_id, "source_id": source_id}
 
-            logger.error(f"❌ Failed: {display_name} → {reason}")
+            # Handle other failures
             sql.run_query(f"""
                 UPDATE [{mapping_schema}].[{mapping_table}]
                 SET Porter_Status = 'Failed', Retry_Count = ISNULL(Retry_Count, 0) + 1, Failure_Reason = ?
                 WHERE Source_Id = ?
             """, (reason, source_id))
+            return {"status": "failed", "reason": reason, "source_id": source_id}
 
-    except Exception as e:
-        logger.exception(f"❌ Exception: {display_name} → {e}")
+    except requests.exceptions.Timeout:
+        timeout_msg = "Request timeout - QBO API response delayed"
         sql.run_query(f"""
             UPDATE [{mapping_schema}].[{mapping_table}]
             SET Porter_Status = 'Failed', Retry_Count = ISNULL(Retry_Count, 0) + 1, Failure_Reason = ?
             WHERE Source_Id = ?
-        """, (str(e), source_id))
+        """, (timeout_msg, source_id))
+        return {"status": "failed", "reason": timeout_msg, "source_id": source_id}
+        
+    except requests.exceptions.ConnectionError:
+        conn_msg = "Connection error - Check network connectivity"
+        sql.run_query(f"""
+            UPDATE [{mapping_schema}].[{mapping_table}]
+            SET Porter_Status = 'Failed', Retry_Count = ISNULL(Retry_Count, 0) + 1, Failure_Reason = ?
+            WHERE Source_Id = ?
+        """, (conn_msg, source_id))
+        return {"status": "failed", "reason": conn_msg, "source_id": source_id}
+        
+    except Exception as e:
+        error_msg = str(e)[:300]
+        sql.run_query(f"""
+            UPDATE [{mapping_schema}].[{mapping_table}]
+            SET Porter_Status = 'Failed', Retry_Count = ISNULL(Retry_Count, 0) + 1, Failure_Reason = ?
+            WHERE Source_Id = ?
+        """, (error_msg, source_id))
+        return {"status": "failed", "reason": error_msg, "source_id": source_id}
 
 def migrate_vendors():
     """
-    Orchestrates the end-to-end vendor migration process to QBO.
+    Optimized orchestration of the end-to-end vendor migration process to QBO.
     Steps:
         - Initializes the mapping table
         - Enriches with required reference mappings and payloads
-        - Iterates through unmigrated or failed rows
-        - Posts each record using `post_vendor()`
+        - Iterates through unmigrated or failed rows with optimized posting
+        - Caches auth credentials to reduce API calls
         - Refreshes token if total runtime exceeds 30 minutes
-        - Tracks progress via timer
+        - Tracks progress with enhanced logging
     """
-    print("\n🚀 Starting Vendor Migration\n" + "=" * 35)
+    print("\n🚀 Starting Optimized Vendor Migration\n" + "=" * 42)
     ensure_mapping_table_exists()
     enrich_mapping_with_targets()
 
@@ -315,28 +368,57 @@ def migrate_vendors():
 
     timer = ProgressTimer(len(df_mapping))
     start_time = datetime.now()
+    
+    # Cache auth credentials for better performance
+    auth_cache = get_qbo_auth()
+    
+    # Performance tracking
+    success_count = 0
+    error_count = 0
+    exists_count = 0
+    skip_count = 0
 
     for _, row in df_mapping.iterrows():
-        # 🔁 Refresh token if more than 30 minutes have passed
+        # 🔁 Refresh token and auth cache if more than 30 minutes have passed
         if (datetime.now() - start_time) > timedelta(minutes=30):
-            logger.info("⏸️ Runtime > 30 min — refreshing token for safety")
+            logger.info("⏸️ Runtime > 30 min — refreshing token and auth cache")
             auto_refresh_token_if_needed()
+            auth_cache = get_qbo_auth()  # Refresh auth cache
             start_time = datetime.now()  # reset timer
         
-        post_vendor(row)
+        # Post vendor with cached auth
+        result = post_vendor(row, auth_cache)
+        
+        # Track results for summary
+        if result["status"] == "success":
+            success_count += 1
+            logger.info(f"✅ Migrated: {result['source_id']} → {result['qbo_id']}")
+        elif result["status"] == "exists":
+            exists_count += 1
+            logger.warning(f"🔁 Already exists: {result['source_id']} → {result['qbo_id']}")
+        elif result["status"] == "failed":
+            error_count += 1
+            logger.error(f"❌ Failed: {result['source_id']} → {result['reason'][:100]}")
+        else:
+            skip_count += 1
+            
         timer.update()
 
-    print("\n🌝 Vendor migration completed.")
+    # Migration summary
+    print(f"\n🌝 Vendor Migration Completed!")
+    print(f"📊 Summary: ✅ {success_count} | 🔁 {exists_count} | ❌ {error_count} | ⏭️ {skip_count}")
+    logger.info(f"Migration complete - Success: {success_count}, Exists: {exists_count}, Failed: {error_count}, Skipped: {skip_count}")
 
 def conditionally_migrate_vendors():
     """
-    Determines whether to resume vendor migration or start fresh based on row counts and statuses.
+    Optimized conditional migration: Determines whether to resume vendor migration or start fresh.
     
     Logic:
     - If mapping table exists and record count matches the source:
         - Process only rows where Porter_Status is NULL (pending).
     - Else:
         - Recreate mapping table, enrich data, and run full migration.
+    - Uses cached auth and enhanced error tracking for better performance
     """
     logger.info("🔍 Checking migration state for Vendor...")
 
@@ -347,7 +429,7 @@ def conditionally_migrate_vendors():
         logger.warning("⚠️ Mapping table does not exist — initializing fresh migration.")
         ensure_mapping_table_exists()
         enrich_mapping_with_targets()
-        df_mapping = sql.fetch_table(mapping_table, mapping_schema)  # 🧩 Fix: load after enrich
+        df_mapping = sql.fetch_table(mapping_table, mapping_schema)  # Load after enrich
     else:
         df_mapping = sql.fetch_table(mapping_table, mapping_schema)
         mapping_count = len(df_mapping)
@@ -362,20 +444,43 @@ def conditionally_migrate_vendors():
             logger.warning("🔁 Mapping table is not aligned — reinitializing from scratch.")
             ensure_mapping_table_exists()
             enrich_mapping_with_targets()
-            df_mapping = sql.fetch_table(mapping_table, mapping_schema)  # 🧩 Fix: load after enrich
+            df_mapping = sql.fetch_table(mapping_table, mapping_schema)  # Load after enrich
 
     df_mapping["Retry_Count"] = pd.to_numeric(df_mapping["Retry_Count"], errors="coerce").fillna(0).astype(int)
 
     timer = ProgressTimer(len(df_mapping))
     start_time = datetime.now()
+    
+    # Cache auth credentials for optimized performance
+    auth_cache = get_qbo_auth()
+    
+    # Performance tracking
+    success_count = 0
+    error_count = 0
+    exists_count = 0
+    skip_count = 0
 
     for _, row in df_mapping.iterrows():
         if (datetime.now() - start_time) > timedelta(minutes=30):
-            logger.info("⏳ Runtime > 30 minutes — refreshing token")
+            logger.info("⏳ Runtime > 30 minutes — refreshing token and auth cache")
             auto_refresh_token_if_needed()
+            auth_cache = get_qbo_auth()  # Refresh auth cache
             start_time = datetime.now()
-        post_vendor(row)
+            
+        # Post vendor with cached auth for better performance
+        result = post_vendor(row, auth_cache)
+        
+        # Track results
+        if result["status"] == "success":
+            success_count += 1
+        elif result["status"] == "exists":
+            exists_count += 1
+        elif result["status"] == "failed":
+            error_count += 1
+        else:
+            skip_count += 1
+            
         timer.update()
 
-    logger.info("✅ Vendor migration completed via conditional execution.")
+    logger.info(f"✅ Conditional vendor migration completed - Success: {success_count}, Exists: {exists_count}, Failed: {error_count}, Skipped: {skip_count}")
 

@@ -50,7 +50,8 @@ entity_list = [
     "Attachable",
     "ExchangeRate",
     "Budget",
-    "Estimate"
+    "Estimate",
+    "taxclassification"
 ]
 
 
@@ -104,6 +105,7 @@ entity_sort_column = {
     "Budget": "StartDate",
     
     "Estimate" : "MetaData.CreateTime"
+
 }
 
 

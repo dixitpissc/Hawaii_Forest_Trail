@@ -4,7 +4,7 @@ Module: item_migrator.py
 Author: Dixit Prajapati
 Created: 2025-09-17
 Description: Handles migration of item records from source system to QBO,
-             including parent-child hierarchy processing,Class mapping, retry logic, and status tracking.
+             including parent-child hierarchy processing, retry logic, and status tracking.
 Production : Ready
 Phase : 02 - Multi User
 """
@@ -88,15 +88,6 @@ if not _df_cat_map.empty and {"Source_Id","Target_Id"}.issubset(_df_cat_map.colu
 else:
     logger.warning(f"⚠️ [{mapping_schema}].[{category_mapping_table}] missing/invalid. Category mapping will be empty.")
     category_id_map = {}
-
-# === Map_Class: Source_Id -> Target_Id (for ClassRef) ===
-class_mapping_table = "Map_Class"
-_df_class_map = sql.fetch_table(class_mapping_table, mapping_schema)
-if not _df_class_map.empty and {"Source_Id","Target_Id"}.issubset(_df_class_map.columns):
-    class_id_map = {str(s): str(t) for s, t in zip(_df_class_map["Source_Id"], _df_class_map["Target_Id"])}
-else:
-    logger.warning(f"⚠️ [{mapping_schema}].[{class_mapping_table}] missing/invalid. Class mapping will be empty.")
-    class_id_map = {}
 
 # ---------- util casters & cleaners ----------
 _html_tag = re.compile(r"<[^>]+>")
@@ -298,12 +289,6 @@ def generate_payload(row: pd.Series, target_parent_id: str | None):
                 target_asset = mapped
             else:
                 val = None
-        elif qbo_col == "ClassRef.value":
-            mapped = class_id_map.get(str(val)) if val is not None else None
-            if mapped is not None:
-                val = mapped
-            else:
-                val = None
 
         # If value is None after mapping, skip adding to payload
         if val is None:
@@ -396,7 +381,7 @@ def _sanitize_staged_payload(p: dict) -> dict:
     # top-level drops
     drop_keys(p, {"FullyQualifiedName","domain","sparse","Id","SyncToken","MetaData","Level"})
     # ensure refs are value-only
-    for ref in ("IncomeAccountRef","ExpenseAccountRef","AssetAccountRef","ParentRef","ClassRef"):
+    for ref in ("IncomeAccountRef","ExpenseAccountRef","AssetAccountRef","ParentRef"):
         if ref in p and isinstance(p[ref], dict):
             if p[ref].get("value") is not None:
                 p[ref] = {"value": str(p[ref]["value"])}
@@ -714,3 +699,624 @@ def migrate_items():
         logger.info("\n🏁 Item migration completed.")
     except Exception as e:
         logger.exception(f"❌ Migration failed: {e}")
+
+
+# import os
+# import json
+# import requests
+# import pandas as pd
+# import re
+# from dotenv import load_dotenv
+# from storage.sqlserver import sql
+# from config.mapping.item_mapping import ITEM_COLUMN_MAPPING as column_mapping
+# from utils.token_refresher import auto_refresh_token_if_needed
+# from utils.retry_handler import initialize_mapping_table, get_retryable_subset
+# from utils.log_timer import global_logger as logger, ProgressTimer
+
+# # === Auto-refresh QBO token if needed ===
+# auto_refresh_token_if_needed()
+# load_dotenv()
+
+# # === QBO Auth Config ===
+# access_token = os.getenv("QBO_ACCESS_TOKEN")
+# realm_id = os.getenv("QBO_REALM_ID")
+# environment = os.getenv("QBO_ENVIRONMENT", "sandbox")
+
+# base_url = (
+#     "https://sandbox-quickbooks.api.intuit.com"
+#     if environment == "sandbox"
+#     else "https://quickbooks.api.intuit.com"
+# )
+
+# query_url = f"{base_url}/v3/company/{realm_id}/query"
+# post_url = f"{base_url}/v3/company/{realm_id}/item"
+
+# headers = {
+#     "Authorization": f"Bearer {access_token}",
+#     "Accept": "application/json",
+#     "Content-Type": "application/json"
+# }
+
+# # === DB Info ===
+# source_table = "Item"
+# source_schema = os.getenv("SOURCE_SCHEMA", "dbo")
+# mapping_schema = os.getenv("MAPPING_SCHEMA", "porter_entities_mapping")
+# mapping_table = "Map_Item"
+# max_retries = 3
+
+# # === Load Account Mapping ===
+# account_mapping_table = "Map_Account"
+# # df_account_map = sql.fetch_table(account_mapping_table, mapping_schema)
+# # account_id_map = dict(zip(df_account_map["Source_Id"], df_account_map["Target_Id"]))
+
+# df_account_map = sql.fetch_table(account_mapping_table, mapping_schema)
+
+# if not df_account_map.empty and "Source_Id" in df_account_map.columns and "Target_Id" in df_account_map.columns:
+#     account_id_map = dict(zip(df_account_map["Source_Id"], df_account_map["Target_Id"]))
+# else:
+#     logger.warning(f"⚠️ Mapping table [{mapping_schema}].[{account_mapping_table}] missing or invalid. Skipping account mapping.")
+#     account_id_map = {}
+
+# # === Load Category Mapping ===
+# # category_mapping_table = "Map_ItemCategory"
+# # df_cat_map = sql.fetch_table(category_mapping_table, mapping_schema)
+# # category_id_map = dict(zip(df_cat_map["Source_Id"], df_cat_map["Target_Id"]))
+# # === Load Category Mapping (with fallback if missing) ===
+# category_mapping_table = "Map_ItemCategory"
+# df_cat_map = sql.fetch_table(category_mapping_table, mapping_schema)
+
+# if not df_cat_map.empty and "Source_Id" in df_cat_map.columns and "Target_Id" in df_cat_map.columns:
+#     category_id_map = dict(zip(df_cat_map["Source_Id"], df_cat_map["Target_Id"]))
+# else:
+#     logger.warning(f"⚠️ Mapping table [{mapping_schema}].[{category_mapping_table}] missing or invalid. Skipping category mapping.")
+#     category_id_map = {}
+
+
+# def get_existing_qbo_item_id(name):
+#     """
+#     Check if an item with the given name already exists in QBO.
+#     Args:
+#         name (str): The name of the item to look up.
+#     Returns:
+#         str or None: The QBO Item ID if found, otherwise None.
+#     """
+#     name = name.replace("'", "''")
+#     query = f"SELECT Id FROM Item WHERE Name = '{name}'"
+#     response = requests.post(query_url, headers=headers, data=json.dumps({"query": query}))
+#     if response.status_code == 200:
+#         items = response.json().get("QueryResponse", {}).get("Item", [])
+#         if items:
+#             return items[0]["Id"]
+#     return None
+
+# def generate_payload(row, target_parent_id=None):
+#     """
+#     Construct a QBO-compatible JSON payload for an item, using mapped fields and parent reference.
+#     Args:
+#         row (pd.Series): A single row from the source DataFrame representing an item.
+#         target_parent_id (str, optional): The QBO ID of the parent category (if applicable).
+#     Returns:
+#         tuple: (payload_dict, income_account_id, expense_account_id) or (None, None, None) if invalid.
+#     """
+#     payload = {}
+#     target_income_account = None
+#     target_expense_account = None
+
+#     for src_col, qbo_col in column_mapping.items():
+#         value = row.get(src_col)
+#         if pd.isna(value) or str(value).strip() == "":
+#             continue
+
+#         if src_col == "IncomeAccountRef.value":
+#             if value in account_id_map:
+#                 target_income_account = account_id_map[value]
+#                 value = target_income_account
+#             else:
+#                 return None, None, None
+
+#         elif src_col == "ExpenseAccountRef.value":
+#             if value in account_id_map:
+#                 target_expense_account = account_id_map[value]
+#                 value = target_expense_account
+#             else:
+#                 return None, None, None
+
+
+#         if "." in qbo_col:
+#             parent, child = qbo_col.split(".", 1)
+#             payload.setdefault(parent, {})[child] = value
+#         else:
+#             payload[qbo_col] = value
+
+#     # ✅ Inject ParentRef + SubItem if parent is mapped
+#     if target_parent_id:
+#         payload["ParentRef"] = {"value": target_parent_id}
+#         payload["SubItem"] = True
+#     else:
+#         payload["SubItem"] = False
+
+#     payload["Active"] = True  # ✅ Always mark item as active
+
+#     return payload, target_income_account, target_expense_account
+
+# def enrich_mapping_with_json(df):
+#     """
+#     Generate and store JSON payloads for all items into the mapping table.
+#     - Applies field mappings.
+#     - Translates account and parent category references.
+#     - Detects existing items in QBO to mark as 'Exists'.
+#     Args:
+#         df (pd.DataFrame): Source DataFrame containing items to migrate.
+#     """
+#     enriched = []
+#     for _, row in df.iterrows():
+#         parent_source_id = row.get("ParentRef.value")
+#         target_parent_id = category_id_map.get(parent_source_id)
+
+#         payload, income_id, expense_id = generate_payload(row, target_parent_id=target_parent_id)
+#         if payload is None:
+#             logger.warning(f"⚠️ Skipped due to missing account mapping: {row['Name']}")
+#             continue
+
+#         existing_id = get_existing_qbo_item_id(row["Name"])
+#         payload_json = json.dumps(payload)
+
+#         enriched.append({
+#             "Source_Id": row["Id"],
+#             "Payload_JSON": payload_json,
+#             "IncomeAccount_Target_Id": income_id,
+#             "ExpenseAccount_Target_Id": expense_id,
+#             "Target_ParentRef_Id": target_parent_id,
+#             "Target_Id": existing_id if existing_id else None,
+#             "Porter_Status": "Exists" if existing_id else None
+#         })
+
+#     df_enriched = pd.DataFrame(enriched)
+#     for _, r in df_enriched.iterrows():
+#         sql.run_query(f"""
+#             UPDATE [{mapping_schema}].[{mapping_table}]
+#             SET Payload_JSON = ?, IncomeAccount_Target_Id = ?, ExpenseAccount_Target_Id = ?,
+#                 Target_ParentRef_Id = ?, Target_Id = ISNULL(Target_Id, ?), Porter_Status = ISNULL(Porter_Status, ?)
+#             WHERE Source_Id = ?
+#         """, (
+#             r.Payload_JSON,
+#             r.IncomeAccount_Target_Id,
+#             r.ExpenseAccount_Target_Id,
+#             r.Target_ParentRef_Id,
+#             r.Target_Id,
+#             r.Porter_Status,
+#             r.Source_Id
+#         ))
+
+# session = requests.Session()
+
+# def post_staged_json():
+#     """
+#     Post staged item payloads (from mapping table) to QBO one-by-one.
+#     - Processes items where status is NULL or 'Failed'.
+#     - Posts the payload to QBO.
+#     - Handles duplicate name detection and updates mapping accordingly.
+#     - Logs progress and failure reasons.
+#     """
+#     df_mapping = sql.fetch_table(mapping_table, mapping_schema)
+#     df_post = df_mapping[(df_mapping["Porter_Status"].isna()) | (df_mapping["Porter_Status"] == "Failed")]
+#     if df_post.empty:
+#         logger.info("✅ No new items to post.")
+#         return
+
+#     timer = ProgressTimer(len(df_post))
+#     for _, row in df_post.iterrows():
+#         source_id = row["Source_Id"]
+#         try:
+#             payload = json.loads(row["Payload_JSON"])
+#             response = session.post(post_url, headers=headers, json=payload)
+#             if response.status_code == 200:
+#                 target_id = response.json()["Item"]["Id"]
+#                 logger.info(f"✅ Migrated: {payload.get('Name')} → {target_id}")
+#                 sql.run_query(f"""
+#                     UPDATE [{mapping_schema}].[{mapping_table}]
+#                     SET Target_Id = ?, Porter_Status = 'Success', Failure_Reason = NULL
+#                     WHERE Source_Id = ?
+#                 """, (target_id, source_id))
+#             else:
+#                 reason_text = response.text
+
+#                 try:
+#                     error_obj = response.json()["Fault"]["Error"][0]
+#                     if error_obj.get("code") == "6240":  # Duplicate Name
+#                         detail = error_obj.get("Detail", "")
+#                         match = re.search(r"Id=(\d+)", detail)
+#                         if match:
+#                             existing_id = match.group(1)
+#                             sql.run_query(f"""
+#                                 UPDATE [{mapping_schema}].[{mapping_table}]
+#                                 SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL
+#                                 WHERE Source_Id = ?
+#                             """, (existing_id, source_id))
+#                             logger.info(f"ℹ️ Duplicate Name: Marked as Exists with ID {existing_id}")
+#                             timer.update()
+#                             continue
+#                     else:
+#                         logger.error(f"❌ Failed to post {payload.get('Name')}: {reason_text[:250]}")
+
+#                 except Exception as e:
+#                     logger.warning(f"⚠️ Could not parse duplicate error response: {e}")
+
+#                 sql.run_query(f"""
+#                     UPDATE [{mapping_schema}].[{mapping_table}]
+#                     SET Porter_Status = 'Failed', Failure_Reason = ?, Retry_Count = ISNULL(Retry_Count, 0) + 1
+#                     WHERE Source_Id = ?
+#                 """, (reason_text[:250], source_id))
+
+#         except Exception as e:
+#             logger.exception(f"❌ Exception posting item: {e}")
+#             sql.run_query(f"""
+#                 UPDATE [{mapping_schema}].[{mapping_table}]
+#                 SET Porter_Status = 'Failed', Failure_Reason = ?, Retry_Count = ISNULL(Retry_Count, 0) + 1
+#                 WHERE Source_Id = ?
+#             """, (str(e), source_id))
+#         timer.update()
+
+# def migrate_items():
+#     """
+#     Orchestrates the full item migration process.
+#     - Loads source item records.
+#     - Ensures mapping table exists and is initialized.
+#     - Adds necessary columns if missing.
+#     - Generates payloads and stores them.
+#     - Posts each item to QBO.
+#     - Logs summary status.
+#     """
+#     logger.info("\n🚀 Starting Item Migration\n" + "=" * 35)
+#     try:
+#         df = sql.fetch_table(source_table, source_schema)
+#         if df.empty:
+#             logger.warning("⚠️ No Item records found.")
+#             return
+
+#         sql.ensure_schema_exists(mapping_schema)
+#         initialize_mapping_table(df, mapping_table, mapping_schema)
+
+#         for col in ["Payload_JSON", "IncomeAccount_Target_Id", "ExpenseAccount_Target_Id", "Target_ParentRef_Id"]:
+#             try:
+#                 sql.run_query(f"ALTER TABLE [{mapping_schema}].[{mapping_table}] ADD {col} NVARCHAR(MAX) NULL")
+#                 logger.info(f"✅ Added column: {col}")
+#             except Exception as e:
+#                 if "already exists" in str(e):
+#                     logger.debug(f"ℹ️ Column already exists: {col}")
+
+
+#         enrich_mapping_with_json(df)
+#         post_staged_json()
+#         logger.info("\n🏁 Item migration completed.")
+
+#     except Exception as e:
+#         logger.exception(f"❌ Migration failed: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#====================================old school==================================================
+# """
+# Sequence : 08
+# Module: item_migrator.py
+# Author: Dixit Prajapati
+# Created: 2025-07-22
+# Description: Handles migration of item records from source system to QBO,
+#              including parent-child hierarchy processing, retry logic, and status tracking.
+# Production : Ready
+# Phase : 01
+# """
+
+# import os
+# import json
+# import requests
+# import pandas as pd
+# import re
+# from dotenv import load_dotenv
+# from storage.sqlserver import sql
+# from config.mapping.item_mapping import ITEM_COLUMN_MAPPING as column_mapping
+# from utils.token_refresher import auto_refresh_token_if_needed
+# from utils.retry_handler import initialize_mapping_table, get_retryable_subset
+# from utils.log_timer import global_logger as logger, ProgressTimer
+
+# # === Auto-refresh QBO token if needed ===
+# auto_refresh_token_if_needed()
+# load_dotenv()
+
+# # === QBO Auth Config ===
+# access_token = os.getenv("QBO_ACCESS_TOKEN")
+# realm_id = os.getenv("QBO_REALM_ID")
+# environment = os.getenv("QBO_ENVIRONMENT", "sandbox")
+
+# base_url = (
+#     "https://sandbox-quickbooks.api.intuit.com"
+#     if environment == "sandbox"
+#     else "https://quickbooks.api.intuit.com"
+# )
+
+# query_url = f"{base_url}/v3/company/{realm_id}/query"
+# post_url = f"{base_url}/v3/company/{realm_id}/item"
+
+# headers = {
+#     "Authorization": f"Bearer {access_token}",
+#     "Accept": "application/json",
+#     "Content-Type": "application/json"
+# }
+
+# # === DB Info ===
+# source_table = "Item"
+# source_schema = os.getenv("SOURCE_SCHEMA", "dbo")
+# mapping_schema = os.getenv("MAPPING_SCHEMA", "porter_entities_mapping")
+# mapping_table = "Map_Item"
+# max_retries = 3
+
+# # === Load Account Mapping ===
+# account_mapping_table = "Map_Account"
+# # df_account_map = sql.fetch_table(account_mapping_table, mapping_schema)
+# # account_id_map = dict(zip(df_account_map["Source_Id"], df_account_map["Target_Id"]))
+
+# df_account_map = sql.fetch_table(account_mapping_table, mapping_schema)
+
+# if not df_account_map.empty and "Source_Id" in df_account_map.columns and "Target_Id" in df_account_map.columns:
+#     account_id_map = dict(zip(df_account_map["Source_Id"], df_account_map["Target_Id"]))
+# else:
+#     logger.warning(f"⚠️ Mapping table [{mapping_schema}].[{account_mapping_table}] missing or invalid. Skipping account mapping.")
+#     account_id_map = {}
+
+# # === Load Category Mapping ===
+# # category_mapping_table = "Map_ItemCategory"
+# # df_cat_map = sql.fetch_table(category_mapping_table, mapping_schema)
+# # category_id_map = dict(zip(df_cat_map["Source_Id"], df_cat_map["Target_Id"]))
+# # === Load Category Mapping (with fallback if missing) ===
+# category_mapping_table = "Map_ItemCategory"
+# df_cat_map = sql.fetch_table(category_mapping_table, mapping_schema)
+
+# if not df_cat_map.empty and "Source_Id" in df_cat_map.columns and "Target_Id" in df_cat_map.columns:
+#     category_id_map = dict(zip(df_cat_map["Source_Id"], df_cat_map["Target_Id"]))
+# else:
+#     logger.warning(f"⚠️ Mapping table [{mapping_schema}].[{category_mapping_table}] missing or invalid. Skipping category mapping.")
+#     category_id_map = {}
+
+
+# def get_existing_qbo_item_id(name):
+#     """
+#     Check if an item with the given name already exists in QBO.
+#     Args:
+#         name (str): The name of the item to look up.
+#     Returns:
+#         str or None: The QBO Item ID if found, otherwise None.
+#     """
+#     name = name.replace("'", "''")
+#     query = f"SELECT Id FROM Item WHERE Name = '{name}'"
+#     response = requests.post(query_url, headers=headers, data=json.dumps({"query": query}))
+#     if response.status_code == 200:
+#         items = response.json().get("QueryResponse", {}).get("Item", [])
+#         if items:
+#             return items[0]["Id"]
+#     return None
+
+# def generate_payload(row, target_parent_id=None):
+#     """
+#     Construct a QBO-compatible JSON payload for an item, using mapped fields and parent reference.
+#     Args:
+#         row (pd.Series): A single row from the source DataFrame representing an item.
+#         target_parent_id (str, optional): The QBO ID of the parent category (if applicable).
+#     Returns:
+#         tuple: (payload_dict, income_account_id, expense_account_id) or (None, None, None) if invalid.
+#     """
+#     payload = {}
+#     target_income_account = None
+#     target_expense_account = None
+
+#     for src_col, qbo_col in column_mapping.items():
+#         value = row.get(src_col)
+#         if pd.isna(value) or str(value).strip() == "":
+#             continue
+
+#         if src_col == "IncomeAccountRef.value":
+#             if value in account_id_map:
+#                 target_income_account = account_id_map[value]
+#                 value = target_income_account
+#             else:
+#                 return None, None, None
+
+#         elif src_col == "ExpenseAccountRef.value":
+#             if value in account_id_map:
+#                 target_expense_account = account_id_map[value]
+#                 value = target_expense_account
+#             else:
+#                 return None, None, None
+
+
+#         if "." in qbo_col:
+#             parent, child = qbo_col.split(".", 1)
+#             payload.setdefault(parent, {})[child] = value
+#         else:
+#             payload[qbo_col] = value
+
+#     # ✅ Inject ParentRef + SubItem if parent is mapped
+#     if target_parent_id:
+#         payload["ParentRef"] = {"value": target_parent_id}
+#         payload["SubItem"] = True
+#     else:
+#         payload["SubItem"] = False
+
+#     payload["Active"] = True  # ✅ Always mark item as active
+
+#     return payload, target_income_account, target_expense_account
+
+# def enrich_mapping_with_json(df):
+#     """
+#     Generate and store JSON payloads for all items into the mapping table.
+#     - Applies field mappings.
+#     - Translates account and parent category references.
+#     - Detects existing items in QBO to mark as 'Exists'.
+#     Args:
+#         df (pd.DataFrame): Source DataFrame containing items to migrate.
+#     """
+#     enriched = []
+#     for _, row in df.iterrows():
+#         parent_source_id = row.get("ParentRef.value")
+#         target_parent_id = category_id_map.get(parent_source_id)
+
+#         payload, income_id, expense_id = generate_payload(row, target_parent_id=target_parent_id)
+#         if payload is None:
+#             logger.warning(f"⚠️ Skipped due to missing account mapping: {row['Name']}")
+#             continue
+
+#         existing_id = get_existing_qbo_item_id(row["Name"])
+#         payload_json = json.dumps(payload)
+
+#         enriched.append({
+#             "Source_Id": row["Id"],
+#             "Payload_JSON": payload_json,
+#             "IncomeAccount_Target_Id": income_id,
+#             "ExpenseAccount_Target_Id": expense_id,
+#             "Target_ParentRef_Id": target_parent_id,
+#             "Target_Id": existing_id if existing_id else None,
+#             "Porter_Status": "Exists" if existing_id else None
+#         })
+
+#     df_enriched = pd.DataFrame(enriched)
+#     for _, r in df_enriched.iterrows():
+#         sql.run_query(f"""
+#             UPDATE [{mapping_schema}].[{mapping_table}]
+#             SET Payload_JSON = ?, IncomeAccount_Target_Id = ?, ExpenseAccount_Target_Id = ?,
+#                 Target_ParentRef_Id = ?, Target_Id = ISNULL(Target_Id, ?), Porter_Status = ISNULL(Porter_Status, ?)
+#             WHERE Source_Id = ?
+#         """, (
+#             r.Payload_JSON,
+#             r.IncomeAccount_Target_Id,
+#             r.ExpenseAccount_Target_Id,
+#             r.Target_ParentRef_Id,
+#             r.Target_Id,
+#             r.Porter_Status,
+#             r.Source_Id
+#         ))
+
+# session = requests.Session()
+
+# def post_staged_json():
+#     """
+#     Post staged item payloads (from mapping table) to QBO one-by-one.
+#     - Processes items where status is NULL or 'Failed'.
+#     - Posts the payload to QBO.
+#     - Handles duplicate name detection and updates mapping accordingly.
+#     - Logs progress and failure reasons.
+#     """
+#     df_mapping = sql.fetch_table(mapping_table, mapping_schema)
+#     df_post = df_mapping[(df_mapping["Porter_Status"].isna()) | (df_mapping["Porter_Status"] == "Failed")]
+#     if df_post.empty:
+#         logger.info("✅ No new items to post.")
+#         return
+
+#     timer = ProgressTimer(len(df_post))
+#     for _, row in df_post.iterrows():
+#         source_id = row["Source_Id"]
+#         try:
+#             payload = json.loads(row["Payload_JSON"])
+#             response = session.post(post_url, headers=headers, json=payload)
+#             if response.status_code == 200:
+#                 target_id = response.json()["Item"]["Id"]
+#                 logger.info(f"✅ Migrated: {payload.get('Name')} → {target_id}")
+#                 sql.run_query(f"""
+#                     UPDATE [{mapping_schema}].[{mapping_table}]
+#                     SET Target_Id = ?, Porter_Status = 'Success', Failure_Reason = NULL
+#                     WHERE Source_Id = ?
+#                 """, (target_id, source_id))
+#             else:
+#                 reason_text = response.text
+#                 logger.error(f"❌ Failed to post {payload.get('Name')}: {reason_text[:250]}")
+
+#                 try:
+#                     error_obj = response.json()["Fault"]["Error"][0]
+#                     if error_obj.get("code") == "6240":  # Duplicate Name
+#                         detail = error_obj.get("Detail", "")
+#                         match = re.search(r"Id=(\d+)", detail)
+#                         if match:
+#                             existing_id = match.group(1)
+#                             sql.run_query(f"""
+#                                 UPDATE [{mapping_schema}].[{mapping_table}]
+#                                 SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL
+#                                 WHERE Source_Id = ?
+#                             """, (existing_id, source_id))
+#                             logger.info(f"ℹ️ Duplicate Name: Marked as Exists with ID {existing_id}")
+#                             timer.update()
+#                             continue
+#                 except Exception as e:
+#                     logger.warning(f"⚠️ Could not parse duplicate error response: {e}")
+
+#                 sql.run_query(f"""
+#                     UPDATE [{mapping_schema}].[{mapping_table}]
+#                     SET Porter_Status = 'Failed', Failure_Reason = ?, Retry_Count = ISNULL(Retry_Count, 0) + 1
+#                     WHERE Source_Id = ?
+#                 """, (reason_text[:250], source_id))
+
+#         except Exception as e:
+#             logger.exception(f"❌ Exception posting item: {e}")
+#             sql.run_query(f"""
+#                 UPDATE [{mapping_schema}].[{mapping_table}]
+#                 SET Porter_Status = 'Failed', Failure_Reason = ?, Retry_Count = ISNULL(Retry_Count, 0) + 1
+#                 WHERE Source_Id = ?
+#             """, (str(e), source_id))
+#         timer.update()
+
+# def migrate_items():
+#     """
+#     Orchestrates the full item migration process.
+#     - Loads source item records.
+#     - Ensures mapping table exists and is initialized.
+#     - Adds necessary columns if missing.
+#     - Generates payloads and stores them.
+#     - Posts each item to QBO.
+#     - Logs summary status.
+#     """
+#     logger.info("\n🚀 Starting Item Migration\n" + "=" * 35)
+#     try:
+#         df = sql.fetch_table(source_table, source_schema)
+#         if df.empty:
+#             logger.warning("⚠️ No Item records found.")
+#             return
+
+#         sql.ensure_schema_exists(mapping_schema)
+#         initialize_mapping_table(df, mapping_table, mapping_schema)
+
+#         for col in ["Payload_JSON", "IncomeAccount_Target_Id", "ExpenseAccount_Target_Id", "Target_ParentRef_Id"]:
+#             try:
+#                 sql.run_query(f"ALTER TABLE [{mapping_schema}].[{mapping_table}] ADD {col} NVARCHAR(MAX) NULL")
+#                 logger.info(f"✅ Added column: {col}")
+#             except Exception as e:
+#                 if "already exists" in str(e):
+#                     logger.debug(f"ℹ️ Column already exists: {col}")
+
+
+#         enrich_mapping_with_json(df)
+#         post_staged_json()
+#         logger.info("\n🏁 Item migration completed.")
+
+#     except Exception as e:
+#         logger.exception(f"❌ Migration failed: {e}")
+
+
