@@ -10,3 +10,7 @@ __pycache__/
 
 # Ignore zip archives
 *.zip
+
+qbo_migration/.env
+
+qbo_migration/.env_source
