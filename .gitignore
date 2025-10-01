@@ -14,3 +14,7 @@ __pycache__/
 qbo_migration/.env
 
 qbo_migration/.env_source
+
+.env
+
+.env_source
