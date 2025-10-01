@@ -3,12 +3,12 @@
 Sequence : 06
 Module: account_migrator.py
 Author: Dixit Prajapati
-Created: 2025-10-01
+Created: 2025-09-17
 Description: Handles migration of Accounts records from source system to QBO,
-             including parent-child hierarchy processing, retry logic, and status tracking. also updating the account number of existing accounts like undeposited fund.
+             including parent-child hierarchy processing, retry logic, and status tracking.
 Production : NotReady (Require changes in failed Accounts)
 Production : Ready
-Phase : 02 - Multi User + Currency
+Phase : 02 - Multi User
 """
 
 import os
@@ -251,28 +251,28 @@ def _qbo_select(query: str, fields: str = "*", startposition: int | None = None,
     return resp.json().get("QueryResponse", {}).get("Account", []) or []
 
 # ---------- Add a helper to page through all Account records (safe fallback) ----------
-# def _fetch_all_accounts_pagewise(batch_size: int = 1000):
-#     """
-#     Fetch all accounts pagewise (STARTPOSITION) and yield each Account dict.
-#     Use this only as a last-resort fallback (when you need to match by AcctNum).
-#     """
-#     start = 1
-#     while True:
-#         q = f"SELECT * FROM Account STARTPOSITION {start} MAXRESULTS {batch_size}"
-#         resp = session.get(query_url, headers=headers, params={"query": q, "minorversion": "75"})
-#         if resp.status_code != 200:
-#             logger.warning(f"❌ QBO paging failed: {resp.status_code} {resp.text[:200]}")
-#             return  # stop iteration on error
-#         resp_json = resp.json()
-#         accounts = resp_json.get("QueryResponse", {}).get("Account", []) or []
-#         if not accounts:
-#             return
-#         for a in accounts:
-#             yield a
-#         # If fewer than a full page returned, done
-#         if len(accounts) < batch_size:
-#             return
-#         start += batch_size
+def _fetch_all_accounts_pagewise(batch_size: int = 1000):
+    """
+    Fetch all accounts pagewise (STARTPOSITION) and yield each Account dict.
+    Use this only as a last-resort fallback (when you need to match by AcctNum).
+    """
+    start = 1
+    while True:
+        q = f"SELECT * FROM Account STARTPOSITION {start} MAXRESULTS {batch_size}"
+        resp = session.get(query_url, headers=headers, params={"query": q, "minorversion": "75"})
+        if resp.status_code != 200:
+            logger.warning(f"❌ QBO paging failed: {resp.status_code} {resp.text[:200]}")
+            return  # stop iteration on error
+        resp_json = resp.json()
+        accounts = resp_json.get("QueryResponse", {}).get("Account", []) or []
+        if not accounts:
+            return
+        for a in accounts:
+            yield a
+        # If fewer than a full page returned, done
+        if len(accounts) < batch_size:
+            return
+        start += batch_size
 
 # ---------- REPLACE _get_existing_by_row with this safe version ----------
 def _get_existing_by_row(row_dict: dict) -> str | None:
@@ -288,16 +288,16 @@ def _get_existing_by_row(row_dict: dict) -> str | None:
         return _reactivate_if_needed(acc_row)
 
     # 1) Name
-    # name = str(row_dict.get("Name") or "").strip()
-    # if name:
-    #     # Escape single quotes by doubling them (QBO expects SQL-style escaping)
-    #     val = name.replace("'", "''")
-    #     try:
-    #         accs = _qbo_select(f"Name = '{val}'", fields="Id, Active, SyncToken, Name, AcctNum")
-    #         if accs:
-    #             return maybe_reactivate_and_return(accs[0])
-    #     except Exception as e:
-    #         logger.warning(f"⚠️ Name lookup failed for '{name}': {e}")
+    name = str(row_dict.get("Name") or "").strip()
+    if name:
+        # Escape single quotes by doubling them (QBO expects SQL-style escaping)
+        val = name.replace("'", "''")
+        try:
+            accs = _qbo_select(f"Name = '{val}'", fields="Id, Active, SyncToken, Name, AcctNum")
+            if accs:
+                return maybe_reactivate_and_return(accs[0])
+        except Exception as e:
+            logger.warning(f"⚠️ Name lookup failed for '{name}': {e}")
 
     # 2) FullyQualifiedName
     fqn = str(row_dict.get("FullyQualifiedName") or "").strip()
@@ -311,76 +311,20 @@ def _get_existing_by_row(row_dict: dict) -> str | None:
             logger.warning(f"⚠️ FQN lookup failed for '{fqn}': {e}")
 
     # 3) Last resort: AcctNum (page and filter client-side)
-    # acctnum = (row_dict.get("Updated_AcctNum") or row_dict.get("AcctNum"))
-    # if acctnum:
-    #     acctnum_str = str(acctnum).strip()
-    #     if acctnum_str:
-    #         logger.info(f"🔎 Falling back to page-and-filter by AcctNum='{acctnum_str}' (server does not support WHERE AcctNum)")
-    #         try:
-    #             for acc in _fetch_all_accounts_pagewise(batch_size=1000):
-    #                 # account's AcctNum may be missing or different types; normalize to str for compare
-    #                 if str(acc.get("AcctNum") or "").strip() == acctnum_str:
-    #                     return maybe_reactivate_and_return(acc)
-    #         except Exception as e:
-    #             logger.warning(f"⚠️ AcctNum fallback failed: {e}")
+    acctnum = (row_dict.get("Updated_AcctNum") or row_dict.get("AcctNum"))
+    if acctnum:
+        acctnum_str = str(acctnum).strip()
+        if acctnum_str:
+            logger.info(f"🔎 Falling back to page-and-filter by AcctNum='{acctnum_str}' (server does not support WHERE AcctNum)")
+            try:
+                for acc in _fetch_all_accounts_pagewise(batch_size=1000):
+                    # account's AcctNum may be missing or different types; normalize to str for compare
+                    if str(acc.get("AcctNum") or "").strip() == acctnum_str:
+                        return maybe_reactivate_and_return(acc)
+            except Exception as e:
+                logger.warning(f"⚠️ AcctNum fallback failed: {e}")
 
     return None
-
-# --------------- Undeposited account logic to get updated account number and target_id 
-
-def _get_undeposited_funds_account():
-    """
-    Return the single Undeposited Funds account (if any) with Id/SyncToken/AcctNum.
-    Prefer subtype match, fallback to FQN (covers localized names with leading '*').
-    """
-    accs = _qbo_select(
-        "AccountSubType = 'UndepositedFunds'",
-        fields="Id, Active, SyncToken, Name, FullyQualifiedName, AcctNum"
-    )
-    if accs:
-        return accs[0]
-
-    # Fallback by FQN (some tenants show it as '*Undeposited Funds')
-    accs = _qbo_select(
-        "FullyQualifiedName = '*Undeposited Funds'",
-        fields="Id, Active, SyncToken, Name, FullyQualifiedName, AcctNum"
-    )
-    return accs[0] if accs else None
-
-def _ensure_undeposited_funds_target(row) -> str | None:
-    acc = _get_undeposited_funds_account()
-    if not acc:
-        return None
-
-    _reactivate_if_needed(acc)
-
-    desired = str((row.get("Updated_AcctNum") or row.get("AcctNum") or "")).strip()
-    if desired:
-        # ✅ ensure we have SyncToken AND Name for sparse update
-        if ("SyncToken" not in acc or acc.get("SyncToken") is None) or ("Name" not in acc or not acc.get("Name")):
-            # pull Name too
-            acc = _get_account_by_id(
-                acc["Id"],
-                fields="Id, Active, SyncToken, Name, AcctNum"
-            ) or acc
-
-        current = str((acc.get("AcctNum") or "")).strip()
-        if desired != current and acc.get("SyncToken") is not None:
-            upd_payload = {
-                "Id": acc["Id"],
-                "SyncToken": acc["SyncToken"],
-                "sparse": True,
-                # 👇 include Name to satisfy QBO
-                "Name": acc.get("Name"),
-                "AcctNum": desired
-            }
-            upd = requests.post(f"{base_url}/v3/company/{realm_id}/account", headers=headers, json=upd_payload)
-            if upd.status_code == 200:
-                logger.info(f"🔧 Updated AcctNum on Undeposited Funds: '{current}' → '{desired}'")
-            else:
-                logger.warning(f"⚠️ Failed to update AcctNum on Undeposited Funds: {upd.status_code} {upd.text[:200]}")
-
-    return acc["Id"]
 
 def _get_account_by_id(acc_id: str, fields: str = "Id, Name, Active, SyncToken"):
     rows = _qbo_select(f"Id = '{acc_id}'", fields=fields)
@@ -420,11 +364,15 @@ def get_existing_qbo_account_id(arg, account_type=None) -> str | None:
 def build_account_hierarchy(df_accounts):
     """
     Calculates and assigns hierarchy levels to accounts based on ParentRef and SubAccount flag.
-    """
-    # ✅ ensure we're not working on a view
-    df_accounts = df_accounts.copy()
 
-    # build a lookup for parents
+    Args:
+        df_accounts (pd.DataFrame): Source accounts DataFrame.
+
+    Returns:
+        pd.DataFrame: Accounts sorted by hierarchical level with 'Level' column added.
+    """
+
+    df_accounts["Level"] = None
     id_to_row = df_accounts.set_index("Id").to_dict(orient="index")
 
     def get_level(account_id, visited=None):
@@ -440,12 +388,8 @@ def build_account_hierarchy(df_accounts):
         parent_id = row.get("ParentRef.value")
         return 1 + get_level(parent_id, visited) if parent_id else 0
 
-    # ✅ use .loc for assignment
-    df_accounts.loc[:, "Level"] = None
-    df_accounts.loc[:, "Level"] = df_accounts["Id"].apply(get_level)
-
+    df_accounts["Level"] = df_accounts["Id"].apply(get_level)
     return df_accounts.sort_values(by="Level")
-
 
 session = requests.Session()
 
@@ -478,16 +422,12 @@ def migrate(df_subset, df_mapping, remigrate_failed=False, is_child=False, timer
                 # timer removed
                 continue
             elif existing.iloc[0]['Porter_Status'] == 'Failed':
-                retry_count_raw = existing.iloc[0].get("Retry_Count", 0)
-                try:
-                    retry_count = int(float(str(retry_count_raw)))
-                except Exception:
-                    retry_count = 0
-                if retry_count >= int(max_retries):
+                retry_count = existing.iloc[0].get("Retry_Count", 0)
+                if retry_count >= max_retries:
                     logger.warning(f"⛔ Skipping {row['Name']} — reached max retry limit")
+                    # timer removed
                     continue
                 logger.info(f"🔁 Retrying: {row['Name']} (Attempt {retry_count + 1})")
-
             else:
                 # timer removed
                 continue
@@ -528,24 +468,9 @@ def migrate(df_subset, df_mapping, remigrate_failed=False, is_child=False, timer
             payload["ParentRef"] = {"value": str(parent_qbo_id)}
         payload["Active"] = True  # ✅ Ensure all Accounts are active
 
-        # >>> ADD THIS BLOCK (handle default Undeposited Funds) <<<
-        if str(row.get("AccountSubType") or "").strip() == "UndepositedFunds":
-            undep_id = _ensure_undeposited_funds_target(row)
-            if undep_id:
-                logger.info(f"🔄 Using existing Undeposited Funds Id={undep_id} (no create)")
-                sql.run_query(f"""
-                    UPDATE [{mapping_schema}].[{mapping_table}]
-                    SET Target_Id = ?, Porter_Status = 'Exists', Failure_Reason = NULL, Payload_JSON = ?
-                    WHERE Source_Id = ?
-                """, (undep_id, json.dumps(payload, indent=2), source_id))
-                if timer:
-                    timer.update()
-                continue
-
 
         try:
-            # existing_qbo_id = get_existing_qbo_account_id(row["Name"], row.get("AccountType"))
-            existing_qbo_id = get_existing_qbo_account_id(row)
+            existing_qbo_id = get_existing_qbo_account_id(row["Name"], row.get("AccountType"))
 
             if existing_qbo_id:
                 logger.info(f"🔄 Exists in QBO: {row['Name']} → {existing_qbo_id}")
