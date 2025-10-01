@@ -1,0 +1,12 @@
+# Ignore migration logs folder
+qbo_migration/logs/
+
+# Ignore Python cache folders
+__pycache__/
+*.pyc
+
+# Ignore DuckDB database files
+*.duckdb
+
+# Ignore zip archives
+*.zip
