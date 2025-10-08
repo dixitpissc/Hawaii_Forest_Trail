@@ -62,7 +62,7 @@ HEADERS = {
 QBO_ENTITIES = [
     # Transaction Entities
     # "Invoice",
-    # "Bill",
+    "Bill",
     # "CreditMemo",
     # "Payment",
     # "JournalEntry",

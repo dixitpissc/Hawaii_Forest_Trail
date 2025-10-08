@@ -6,7 +6,7 @@ Created: 2025-09-15
 Description: Handles migration of Bill records from QBO to QBO.
 Production : Ready
 Development : Require when necessary
-Phase : 02 - Multi User + Tax
+Phase : 02 - Multi User + Tax + ReimburgeID 
 """
 
 #working good till payload generation
@@ -457,6 +457,31 @@ def insert_bill_map_dataframe(df, table: str, schema: str = "dbo"):
         cur.close()
         conn.close()
 
+
+# -------------------- DDL helper (add once) --------------------
+# def _ensure_reimburse_col():
+#     """
+#     Ensure porter_entities_mapping.Map_Bill has column:
+#       target_reimbursecharge_id NVARCHAR(MAX) NULL
+#     Idempotent; safe to call many times.
+#     """
+#     sql.executesql(f"""
+#     IF NOT EXISTS (
+#         SELECT 1
+#         FROM INFORMATION_SCHEMA.COLUMNS
+#         WHERE TABLE_SCHEMA = '{MAPPING_SCHEMA}'
+#           AND TABLE_NAME   = 'Map_Bill'
+#           AND COLUMN_NAME  = 'target_reimbursecharge_id'
+#     )
+#     BEGIN
+#         ALTER TABLE [{MAPPING_SCHEMA}].[Map_Bill]
+#         ADD [target_reimbursecharge_id] NVARCHAR(MAX) NULL;
+#         -- Optional index if you plan to filter by this column:
+#         -- CREATE NONCLUSTERED INDEX IX_Map_Bill_Target_ReimburseCharge
+#         --   ON [{MAPPING_SCHEMA}].[Map_Bill]([target_reimbursecharge_id]);
+#     END
+#     """)
+
 def ensure_mapping_table(BILL_DATE_FROM='1900-01-01',BILL_DATE_TO='2080-12-31'):
     """
     Build Map_Bill with minimal queries:
@@ -488,6 +513,7 @@ def ensure_mapping_table(BILL_DATE_FROM='1900-01-01',BILL_DATE_TO='2080-12-31'):
     df["Retry_Count"] = 0
     df["Failure_Reason"] = None
     df["Payload_JSON"] = None
+    df["Target_Reimbursecharge_Id"] = None
 
     maps = preload_maps(MAPPING_SCHEMA)
 
@@ -935,6 +961,20 @@ def remove_nulls_from_payload(data):
     else:
         return data
 
+def _extract_reimburse_ids_from_bill_obj(bill_obj: dict) -> str | None:
+    """
+    Returns a comma-separated string of ReimburseCharge IDs found in Bill.LinkedTxn
+    (minorversion >= 55 allows ReimburseCharge as a LinkedTxn on Bill).
+    """
+    try:
+        linked = bill_obj.get("LinkedTxn") or []
+        ids = [str(x.get("TxnId")) for x in linked if (x.get("TxnType") == "ReimburseCharge" and x.get("TxnId"))]
+        if ids:
+            return ",".join(sorted(set(ids), key=lambda z: int(z) if str(z).isdigit() else z))
+    except Exception:
+        pass
+    return None
+
 # ---------------------------- POSTING ----------------------------
 session = requests.Session()
 
@@ -1058,8 +1098,12 @@ def _post_batch_bills(eligible_batch, url, headers, timeout=40, post_batch_limit
                         seen.add(bid)
                         ent = item.get("Bill")
                         if ent and "Id" in ent:
+                            # qid = ent["Id"]
+                            # successes.append((qid, bid))
                             qid = ent["Id"]
-                            successes.append((qid, bid))
+                            reimb = _extract_reimburse_ids_from_bill_obj(ent)  # <- NEW
+                            successes.append((qid, bid, reimb))                # <- NEW shape
+
                             logger.info(f"✅ Bill {bid} → QBO {qid}")
                             continue
 
@@ -1107,17 +1151,52 @@ def _post_batch_bills(eligible_batch, url, headers, timeout=40, post_batch_limit
     return successes, failures
 
 # ============================ Apply Updates ============================
+# def _apply_batch_updates_bill(successes, failures):
+#     """
+#     Set-based updates for Map_Bill; fast and idempotent.
+#     """
+#     if successes:
+#         executemany(
+#             f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
+#             f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+#             f"WHERE Source_Id=?",
+#             [(qid, sid) for qid, sid in successes]
+#         )
+#     if failures:
+#         executemany(
+#             f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
+#             f"SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? "
+#             f"WHERE Source_Id=?",
+#             [(reason, sid) for reason, sid in failures]
+#         )
+
 def _apply_batch_updates_bill(successes, failures):
     """
     Set-based updates for Map_Bill; fast and idempotent.
+    successes: list of tuples (qid, sid, reimburse_csv_or_None)
+    failures : list of tuples (reason, sid)
     """
     if successes:
-        executemany(
-            f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
-            f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
-            f"WHERE Source_Id=?",
-            [(qid, sid) for qid, sid in successes]
-        )
+        # Split updates: with/without reimburse ids to avoid wiping existing values.
+        with_reimb   = [(qid, reimb, sid) for (qid, sid, reimb) in successes if reimb]
+        without_reimb = [(qid, sid) for (qid, sid, reimb) in successes if not reimb]
+
+        if with_reimb:
+            executemany(
+                f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
+                f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL, "
+                f"    Target_Reimbursecharge_Id=? "
+                f"WHERE Source_Id=?",
+                with_reimb
+            )
+        if without_reimb:
+            executemany(
+                f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
+                f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+                f"WHERE Source_Id=?",
+                without_reimb
+            )
+
     if failures:
         executemany(
             f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
@@ -1125,6 +1204,7 @@ def _apply_batch_updates_bill(successes, failures):
             f"WHERE Source_Id=?",
             [(reason, sid) for reason, sid in failures]
         )
+
 
 # ============================ Single-record Fallback ====================
 def post_bill(row):
@@ -1155,11 +1235,30 @@ def post_bill(row):
     try:
         resp = session.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
-            qid = (resp.json().get("Bill") or {}).get("Id")
+            # qid = (resp.json().get("Bill") or {}).get("Id")
+            # if qid:
+            #     update_mapping_status(MAPPING_SCHEMA, "Map_Bill", sid, "Success", target_id=qid)
+            #     logger.info(f"✅ Bill {sid} → QBO {qid}")
+            #     return
+            bill_obj = (resp.json().get("Bill") or {})
+            qid = bill_obj.get("Id")
             if qid:
-                update_mapping_status(MAPPING_SCHEMA, "Map_Bill", sid, "Success", target_id=qid)
-                logger.info(f"✅ Bill {sid} → QBO {qid}")
+                reimb = _extract_reimburse_ids_from_bill_obj(bill_obj)
+                if reimb:
+                    # lightweight, targeted update to include reimburse ids
+                    executemany(
+                        f"UPDATE [{MAPPING_SCHEMA}].[Map_Bill] "
+                        f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL, "
+                        f"    Target_Reimbursecharge_Id=? "
+                        f"WHERE Source_Id=?",
+                        [(qid, reimb, sid)]
+                    )
+                else:
+                    update_mapping_status(MAPPING_SCHEMA, "Map_Bill", sid, "Success", target_id=qid)
+                logger.info(f"✅ Bill {sid} → QBO {qid} "
+                            f"{'(reimburse ids: ' + reimb + ')' if reimb else ''}")
                 return
+            
             reason = "No Id in response"
         elif resp.status_code in (401, 403):
             logger.warning(f"🔐 {resp.status_code} on Bill {sid}; refreshing token and retrying once...")

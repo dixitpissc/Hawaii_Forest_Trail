@@ -256,11 +256,11 @@
 #     migrate_payments()
 
 
-# from distroyer.master_distroyer import main
+from distroyer.master_distroyer import main
 
-# if __name__ == "__main__":
-#     # for val in range(1,100):
-#     main()
+if __name__ == "__main__":
+    for val in range(1,5):
+        main()
 
 # from migration.D11_invoice_migrator import resume_or_post_invoices
 # def run_invoice_migration():

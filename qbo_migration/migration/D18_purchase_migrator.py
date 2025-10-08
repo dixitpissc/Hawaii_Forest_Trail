@@ -7,7 +7,7 @@ Created: 2025-09-16
 Description: Handles migration of Purchase records from QBO to QBO.
 Production : Working 
 Development : Require when necessary
-Phase : 02 - Multi User + Tax
+Phase : 02 - Multi User + Tax + ReimburseID
 """
 
 import os, json, requests, pandas as pd
@@ -328,6 +328,27 @@ def insert_purchase_map_dataframe(df, table: str, schema: str = "dbo"):
     else:
         sql.insert_invoice_map_dataframe(df, table, schema)  # fallback
 
+def _ensure_purchase_reimburse_col():
+    """
+    Ensure porter_entities_mapping.Map_Purchase has:
+      Target_Reimbursecharge_Id NVARCHAR(MAX) NULL
+    Idempotent/safe to call often.
+    """
+    sql.executesql(f"""
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '{MAPPING_SCHEMA}'
+          AND TABLE_NAME   = 'Map_Purchase'
+          AND COLUMN_NAME  = 'Target_Reimbursecharge_Id'
+    )
+    BEGIN
+        ALTER TABLE [{MAPPING_SCHEMA}].[Map_Purchase]
+        ADD [Target_Reimbursecharge_Id] NVARCHAR(MAX) NULL;
+    END
+    """)
+
+
 def ensure_mapping_table(PURCHASE_DATE_FROM='1900-01-01',PURCHASE_DATE_TO='2080-12-31'):
     # 1. Date filter and only purchases with lines
     date_from = PURCHASE_DATE_FROM
@@ -372,6 +393,7 @@ def ensure_mapping_table(PURCHASE_DATE_FROM='1900-01-01',PURCHASE_DATE_TO='2080-
     df["Retry_Count"] = 0
     df["Failure_Reason"] = None
     df["Payload_JSON"] = None
+    df["Target_Reimbursecharge_Id"] = None
 
     # 3. Bulk load mapping tables into dicts
     def load_map(table):
@@ -783,6 +805,24 @@ except NameError:
     import requests
     session = requests.Session()
 
+#tiny extractor to read ReimburseCharge ids from a Purchase object
+
+def _extract_reimburse_ids_from_purchase_obj(purchase_obj: dict) -> str | None:
+    """
+    Returns a comma-separated string of ReimburseCharge IDs found in Purchase.LinkedTxn.
+    """
+    try:
+        linked = purchase_obj.get("LinkedTxn") or []
+        ids = [str(x.get("TxnId")) for x in linked
+               if x and x.get("TxnType") == "ReimburseCharge" and x.get("TxnId")]
+        if ids:
+            # de-dup, keep numeric order when possible
+            uniq = sorted(set(ids), key=lambda z: int(z) if str(z).isdigit() else z)
+            return ",".join(uniq)
+    except Exception:
+        pass
+    return None
+
 
 # ============================ Batch poster & updates ==============================
 def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_limit=20, max_manual_retries=1):
@@ -854,9 +894,14 @@ def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_l
                         seen.add(bid)
                         ent = item.get("Purchase")
                         if ent and "Id" in ent:
+                            # qid = ent["Id"]
+                            # successes.append((qid, bid))
+                            # logger.info(f"✅ Purchase {bid} → QBO {qid}")
                             qid = ent["Id"]
-                            successes.append((qid, bid))
-                            logger.info(f"✅ Purchase {bid} → QBO {qid}")
+                            reimb = _extract_reimburse_ids_from_purchase_obj(ent)  # NEW
+                            successes.append((qid, bid, reimb))                    # NEW shape
+                            logger.info(f"✅ Purchase {bid} → QBO {qid}" + (f" (reimburse ids: {reimb})" if reimb else ""))
+
                             continue
 
                         fault = item.get("Fault") or {}
@@ -904,19 +949,70 @@ def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_l
 
     return successes, failures
 
+# def _apply_batch_updates_purchase(successes, failures):
+#     """
+#     Set-based updates for Map_Purchase; fast and idempotent.
+#     """
+#     try:
+
+#         if successes:
+#             executemany(
+#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+#                 f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+#                 f"WHERE Source_Id=?",
+#                 [(qid, sid) for qid, sid in successes]
+#             )
+#         if failures:
+#             executemany(
+#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+#                 f"SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? "
+#                 f"WHERE Source_Id=?",
+#                 [(reason, sid) for reason, sid in failures]
+#             )
+#     except NameError:
+#         # Fallback to per-row updates if executemany helper is not available
+#         for qid, sid in successes or []:
+#             sql.run_query(
+#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+#                 f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+#                 f"WHERE Source_Id=?",
+#                 (qid, sid)
+#             )
+#         for reason, sid in failures or []:
+#             sql.run_query(
+#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+#                 f"SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? "
+#                 f"WHERE Source_Id=?",
+#                 (reason, sid)
+#             )
+
 def _apply_batch_updates_purchase(successes, failures):
     """
     Set-based updates for Map_Purchase; fast and idempotent.
+    successes: list of (qid, sid, reimb_csv_or_None)
+    failures : list of (reason, sid)
     """
     try:
-
         if successes:
-            executemany(
-                f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-                f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
-                f"WHERE Source_Id=?",
-                [(qid, sid) for qid, sid in successes]
-            )
+            with_reimb    = [(qid, reimb, sid) for (qid, sid, reimb) in successes if reimb]
+            without_reimb = [(qid, sid) for (qid, sid, reimb) in successes if not reimb]
+
+            if with_reimb:
+                executemany(
+                    f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+                    f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL, "
+                    f"    Target_Reimbursecharge_Id=? "
+                    f"WHERE Source_Id=?",
+                    with_reimb
+                )
+            if without_reimb:
+                executemany(
+                    f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+                    f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+                    f"WHERE Source_Id=?",
+                    without_reimb
+                )
+
         if failures:
             executemany(
                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
@@ -925,14 +1021,25 @@ def _apply_batch_updates_purchase(successes, failures):
                 [(reason, sid) for reason, sid in failures]
             )
     except NameError:
-        # Fallback to per-row updates if executemany helper is not available
-        for qid, sid in successes or []:
-            sql.run_query(
-                f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-                f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
-                f"WHERE Source_Id=?",
-                (qid, sid)
-            )
+        # Fallback (no executemany helper)
+        for s in successes or []:
+            if len(s) == 3 and s[2]:
+                qid, sid, reimb = s
+                sql.run_query(
+                    f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+                    f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL, "
+                    f"    Target_Reimbursecharge_Id=? "
+                    f"WHERE Source_Id=?",
+                    (qid, reimb, sid)
+                )
+            else:
+                qid, sid = s[:2]
+                sql.run_query(
+                    f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
+                    f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+                    f"WHERE Source_Id=?",
+                    (qid, sid)
+                )
         for reason, sid in failures or []:
             sql.run_query(
                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
@@ -984,14 +1091,36 @@ def post_purchase(row):
     try:
         resp = session.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
-            qid = (resp.json().get("Purchase") or {}).get("Id")
+            # qid = (resp.json().get("Purchase") or {}).get("Id")
+            # if qid:
+            #     sql.run_query(
+            #         f"UPDATE {MAPPING_SCHEMA}.Map_Purchase SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL WHERE Source_Id=?",
+            #         (qid, row["Source_Id"])
+            #     )
+            #     logger.info(f"✅ Purchase {row['Source_Id']} → QBO {qid}")
+            #     return
+            purchase_obj = (resp.json().get("Purchase") or {})
+            qid = purchase_obj.get("Id")
             if qid:
-                sql.run_query(
-                    f"UPDATE {MAPPING_SCHEMA}.Map_Purchase SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL WHERE Source_Id=?",
-                    (qid, row["Source_Id"])
-                )
-                logger.info(f"✅ Purchase {row['Source_Id']} → QBO {qid}")
+                reimb = _extract_reimburse_ids_from_purchase_obj(purchase_obj)  # NEW
+                if reimb:
+                    sql.run_query(
+                        f"UPDATE {MAPPING_SCHEMA}.Map_Purchase "
+                        f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL, "
+                        f"    Target_Reimbursecharge_Id=? "
+                        f"WHERE Source_Id=?",
+                        (qid, reimb, row["Source_Id"])
+                    )
+                else:
+                    sql.run_query(
+                        f"UPDATE {MAPPING_SCHEMA}.Map_Purchase "
+                        f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
+                        f"WHERE Source_Id=?",
+                        (qid, row["Source_Id"])
+                    )
+                logger.info(f"✅ Purchase {row['Source_Id']} → QBO {qid}" + (f" (reimburse ids: {reimb})" if reimb else ""))
                 return
+
             reason = "No Id in response"
         elif resp.status_code in (401, 403):
             logger.warning(f"🔐 {resp.status_code} on Purchase {row['Source_Id']}; refreshing token and retrying once...")
@@ -1031,6 +1160,7 @@ def post_purchase(row):
 
 def migrate_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO,retry_only=False):
     logger.info("\n🚀 Starting Purchase Migration\n" + "=" * 40)
+    # _ensure_purchase_reimburse_col()
     ensure_mapping_table(PURCHASE_DATE_FROM,PURCHASE_DATE_TO)
 
     if ENABLE_GLOBAL_JE_DOCNUMBER_DEDUP:
@@ -1080,6 +1210,7 @@ def resume_or_post_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO):
 
     if not sql.table_exists("Map_Purchase", MAPPING_SCHEMA):
         logger.warning("❌ Map_Purchase table does not exist. Running full migration.")
+        # _ensure_purchase_reimburse_col()
         migrate_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO)
         return
 
@@ -1088,11 +1219,13 @@ def resume_or_post_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO):
 
     if len(mapped_df) != len(source_df):
         logger.warning(f"❌ Row count mismatch: Map_Purchase = {len(mapped_df)}, Source Purchase = {len(source_df)}")
+        # _ensure_purchase_reimburse_col()
         migrate_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO)
         return
 
     if mapped_df["Payload_JSON"].isnull().any() or (mapped_df["Payload_JSON"] == "").any():
         logger.warning("🔍 Some rows in Map_Purchase are missing Payload_JSON. Regenerating for missing only...")
+        # _ensure_purchase_reimburse_col()
         generate_purchase_payloads_in_batches()
         mapped_df = sql.fetch_table("Map_Purchase", MAPPING_SCHEMA)
 
@@ -1157,6 +1290,7 @@ def smart_purchase_migration(PURCHASE_DATE_FROM, PURCHASE_DATE_TO):
     # ----- Full migration path -----
     if full_process:
         ensure_mapping_table(PURCHASE_DATE_FROM, PURCHASE_DATE_TO)
+        # _ensure_purchase_reimburse_col()
 
         if ENABLE_GLOBAL_JE_DOCNUMBER_DEDUP:
             apply_global_docnumber_strategy_for_Purchase()

@@ -9,6 +9,7 @@ def update_mapping_status(
     source_id,
     status: str,
     target_id: str = None,
+    target_linkedtxn_reimburse: str = None,
     failure_reason: str = None,
     payload: dict = None,
     increment_retry: bool = False
@@ -32,6 +33,9 @@ def update_mapping_status(
     if target_id:
         cols.append("Target_Id = ?")
         params.append(target_id)
+    if target_linkedtxn_reimburse is not None:
+        cols.append("Target_LinkedTxn_Reimburse = ?")
+        params.append(target_linkedtxn_reimburse)
 
     cols.append("Porter_Status = ?")
     params.append(status)
@@ -49,10 +53,13 @@ def update_mapping_status(
     if increment_retry:
         cols.append("Retry_Count = ISNULL(Retry_Count, 0) + 1")
 
+    import logging
+    logging.debug(f"update_mapping_status: Source_Id={source_id}, Target_Id={target_id}, Target_LinkedTxn_Reimburse={target_linkedtxn_reimburse}, Status={status}")
     query = f"""
         UPDATE [{mapping_schema}].[{mapping_table}]
         SET {', '.join(cols)}
         WHERE Source_Id = ?
     """
     params.append(source_id)
+    logging.debug(f"update_mapping_status SQL: {query} | Params: {params}")
     sql.run_query(query, tuple(params))
