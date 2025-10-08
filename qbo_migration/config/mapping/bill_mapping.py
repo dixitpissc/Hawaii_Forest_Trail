@@ -35,10 +35,13 @@ BILL_LINE_MAPPING = {
     "CustomerRef.name": "AccountBasedExpenseLineDetail.CustomerRef.name",
     "BillableStatus": "AccountBasedExpenseLineDetail.BillableStatus",
     "TaxCodeRef.value": "AccountBasedExpenseLineDetail.TaxCodeRef.value",
+    "MarkupInfo.Percent": "AccountBasedExpenseLineDetail.MarkupInfo.Percent",
 
     # ItemBasedExpenseLineDetail (if used interchangeably in same dataset)
     "ItemBasedExpenseLineDetail.ItemRef.value": "ItemBasedExpenseLineDetail.ItemRef.value",
     "ItemBasedExpenseLineDetail.ItemRef.name": "ItemBasedExpenseLineDetail.ItemRef.name",
+    "ItemBasedExpenseLineDetail.ClassRef.value": "ItemBasedExpenseLineDetail.ClassRef.value",
+    "ItemBasedExpenseLineDetail.ClassRef.name": "ItemBasedExpenseLineDetail.ClassRef.name",
     "ItemBasedExpenseLineDetail.BillableStatus": "ItemBasedExpenseLineDetail.BillableStatus",
     "ItemBasedExpenseLineDetail.TaxCodeRef.value": "ItemBasedExpenseLineDetail.TaxCodeRef.value",
     "ItemBasedExpenseLineDetail.UnitPrice": "ItemBasedExpenseLineDetail.UnitPrice",

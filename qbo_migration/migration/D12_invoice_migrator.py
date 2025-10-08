@@ -834,7 +834,7 @@ def _post_batch_invoices(eligible_batch, url, headers, timeout=40, post_batch_li
                     for (sid, payload) in chunk
                 ]
             }
-            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+            return '' #session.post(batch_url, headers=_headers, json=body, timeout=timeout)
 
         attempted_refresh = False
         for attempt in range(max_manual_retries + 1):

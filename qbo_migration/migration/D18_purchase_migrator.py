@@ -229,7 +229,7 @@ def insert_purchase_map_dataframe(df, table: str, schema: str = "dbo"):
             (source_id,)
         )
 
-    df["Mapped_PaymentMethod"] = df["PaymentType"].apply(map_payment_type) if "PaymentType" in df.columns else None
+    # Removed PaymentType mapping to Mapped_PaymentMethod (use PaymentType as-is)
     df["Mapped_AccountRef"]  = df["AccountRef.value"].apply(map_account) if "AccountRef.value" in df.columns else None
 
     # ---- line-level enrichment ----
@@ -488,25 +488,56 @@ def build_payload(row, lines):
     # Header fields
     raw_doc = row.get(HEADER_MAP.get("DocNumber"))
     dedup_doc = row.get("Duplicate_DocNumber")
-    doc_number = (
-        str(dedup_doc).strip()
-        if pd.notna(dedup_doc) and str(dedup_doc).strip() != ""
-        else str(raw_doc).strip()
-    )
+    def _valid_docnumber(val):
+        if val is None:
+            return False
+        s = str(val).strip()
+        return s and s.lower() != "null"
+    doc_number = None
+    if _valid_docnumber(dedup_doc):
+        doc_number = str(dedup_doc).strip()
+    elif _valid_docnumber(raw_doc):
+        doc_number = str(raw_doc).strip()
     payload = {
-        "DocNumber": doc_number,
         "CurrencyRef": {"value": row.get("CurrencyRef.value", "USD") or "USD"},
         "Line": []
     }
+    if doc_number:
+        payload["DocNumber"] = doc_number
+    # Add header-level DepartmentRef if present and mapped
+    dept_header_val = row.get("DepartmentRef_value")
+    if pd.notna(dept_header_val):
+        dept_header_val_str = str(dept_header_val).strip()
+        dept_header_id = dept_map.get(dept_header_val_str)
+        if dept_header_id:
+            payload["DepartmentRef"] = {"value": str(dept_header_id)}
+        else:
+            logger.debug(f"No department mapping found for header value: '{dept_header_val_str}' (Source_Id={row.get('Source_Id')})")
+    else:
+        logger.debug(f"No DepartmentRef.value found in row for header (Source_Id={row.get('Source_Id')})")
     # Add PaymentType if present
     payment_type = row.get("PaymentType")
     if pd.notna(payment_type):
         payload["PaymentType"] = payment_type
+    
+    # Add header-level Credit if present
+    credit_val = row.get("Credit")
+    if pd.notna(credit_val):
+        credit_str = str(credit_val).strip().lower()
+        if credit_str in ("true", "1", "yes", "on"):
+            payload["Credit"] = True
+        elif credit_str in ("false", "0", "no", "off"):
+            payload["Credit"] = False
+
     if pd.notna(row.get("ExchangeRate")):
         payload["ExchangeRate"] = safe_float(row["ExchangeRate"])
     # Add mapped payment method
-    if pd.notna(row.get("Mapped_PaymentMethod")):
-        payload["PaymentMethodRef"] = {"value": str(row["Mapped_PaymentMethod"])}
+        # Add mapped PaymentMethodRef from PaymentMethodRef.value if present
+        payment_method_val = row.get("PaymentMethodRef.value")
+        if pd.notna(payment_method_val):
+            payment_method_id = payment_map.get(payment_method_val)
+            if payment_method_id:
+                payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     # Add mapped account ref
     acct_id = row.get("Mapped_AccountRef")
     if not acct_id and pd.notna(row.get("AccountRef.value")):
@@ -570,11 +601,18 @@ def build_payload(row, lines):
         amount = safe_float(row_vals[c_Amount]) if c_Amount is not None else None
         if not amount or amount == 0:
             continue
+        desc_val = row_vals[c_Desc] if c_Desc is not None else None
+        def _valid_desc(val):
+            if val is None:
+                return False
+            s = str(val).strip()
+            return s and s.lower() != "null"
         base_line = {
             "Amount": amount,
-            "Description": row_vals[c_Desc] if c_Desc is not None else None,
             "DetailType": detail_type
         }
+        if _valid_desc(desc_val):
+            base_line["Description"] = str(desc_val).strip()
         detail = {}
         if detail_type == "AccountBasedExpenseLineDetail":
             if c_Acct is not None:

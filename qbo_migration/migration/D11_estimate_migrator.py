@@ -1,11 +1,11 @@
 """
 Sequence : 24
 Author: Dixit Prajapati
-Created: 2025-09-02
+Created: 2025-10-03
 Description: Handles migration of estimate records from source system to QBO.
 Production : Ready
 Development : Require when necessary
-Phase : 01
+Phase : 02 - MultiUser + Tax + Currency
 """
 
 import os, json, requests, pandas as pd
@@ -205,56 +205,6 @@ def ensure_mapping_table():
     logger.info(f"✅ Inserted {len(df)} rows into {MAPPING_SCHEMA}.Map_Estimate")
 
 # ──────────────────────────────────────────────────────────────
-# Duplicate DocNumber handling
-# ──────────────────────────────────────────────────────────────
-# def apply_duplicate_docnumber_strategy():
-#     logger.info("🔍 Detecting duplicate DocNumbers for Estimate...")
-#     sql.run_query(f"""
-#         IF COL_LENGTH('{MAPPING_SCHEMA}.Map_Estimate', 'Duplicate_Docnumber') IS NULL
-#         BEGIN
-#             ALTER TABLE [{MAPPING_SCHEMA}].[Map_Estimate]
-#             ADD Duplicate_Docnumber NVARCHAR(30);
-#         END
-#     """)
-
-#     df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
-#     if df.empty or "DocNumber" not in df.columns:
-#         logger.info("ℹ️ No DocNumber column or no rows; skipping duplicate strategy.")
-#         return
-
-#     df = df[df["DocNumber"].notna() &
-#             (df["DocNumber"].astype(str).str.strip().str.lower() != "null") &
-#             (df["DocNumber"].astype(str).str.strip() != "")]
-#     if df.empty:
-#         logger.info("ℹ️ No valid DocNumbers to dedupe.")
-#         return
-
-#     df["DocNumber"] = df["DocNumber"].astype(str)
-#     counts = df["DocNumber"].value_counts()
-#     dups = counts[counts > 1].index.tolist()
-
-#     for doc in dups:
-#         rows = df[df["DocNumber"] == doc]
-#         for i, (_, row) in enumerate(rows.iterrows(), start=1):
-#             sid = row["Source_Id"]
-#             new_doc = (f"{doc}-{i:02d}" if len(doc) <= 18 else f"{i:02d}{doc[2:]}")[:21]
-#             sql.run_query(f"""
-#                 UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
-#                 SET Duplicate_Docnumber = ?
-#                 WHERE Source_Id = ?
-#             """, (new_doc, sid))
-#             logger.warning(f"⚠️ Duplicate Estimate DocNumber '{doc}' → '{new_doc}'")
-
-#     uniques = df[~df["DocNumber"].isin(dups)]
-#     for _, row in uniques.iterrows():
-#         sql.run_query(f"""
-#             UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
-#             SET Duplicate_Docnumber = ?
-#             WHERE Source_Id = ?
-#         """, (row["DocNumber"], row["Source_Id"]))
-#     logger.info(f"✅ Duplicate strategy applied: {len(dups)} DocNumber groups updated.")
-
-# ──────────────────────────────────────────────────────────────
 # Lines loader
 # ──────────────────────────────────────────────────────────────
 def get_lines(estimate_id):
@@ -437,11 +387,11 @@ def build_payload(row, lines):
         "declined": "Rejected",   # UI says Declined; API uses Rejected
         "rejected": "Rejected",
         "closed": "Closed",
-        "converted": None         # never send; QBO sets this automatically
+        "converted": "converted"         # never send; QBO sets this automatically
     }
     _normalized = _status_map.get(_status_raw)
 
-    qbo_allowed = {"Pending", "Accepted", "Rejected", "Closed"}
+    qbo_allowed = {"Pending", "Accepted", "Rejected", "Closed","converted"}
 
     if _normalized in qbo_allowed:
         payload["TxnStatus"] = _normalized

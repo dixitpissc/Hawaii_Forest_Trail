@@ -112,18 +112,11 @@ def refresh_qbo_token_for_user(user_id: str) -> str | None:
     Returns the fresh access_token (or None on failure).
     """
     user_id=USERID
-    
-    # Get client credentials from database (same source as ensure_valid_access_token)
-    with _sql_conn() as conn:
-        cfg = _get_universal_config(conn)
-        if not cfg:
-            print("❌ No configuration found in ct.QBO_Universal_Token table.")
-            return None
-        client_id = cfg["client_id"]
-        client_secret = cfg["client_secret"]
-    
+    # Client credentials remain in env
+    client_id = os.getenv("QBO_CLIENT_ID")
+    client_secret = os.getenv("QBO_CLIENT_SECRET")
     if not client_id or not client_secret:
-        print("❌ Missing client_id / client_secret in database configuration.")
+        print("❌ Missing QBO_CLIENT_ID / QBO_CLIENT_SECRET in environment.")
         return None
 
     row = _fetch_token_row(user_id)
@@ -155,13 +148,9 @@ def refresh_qbo_token_for_user(user_id: str) -> str | None:
             return None
         # Save back to DB (CreatedAtUtc will be updated to SYSUTCDATETIME())
         _upsert_token_row(user_id, realm_id, access_token, new_refresh_token)
-        print(f"✅ Token refreshed successfully for user '{user_id}'")
         return access_token
     else:
         print(f"❌ Failed to refresh token for '{user_id}': {resp.status_code} {resp.text}")
-        print(f"🔍 Debug info - Client ID: {client_id[:8]}..., Refresh Token: {refresh_token[:10]}...")
-        if resp.status_code == 400:
-            print("💡 Common causes: Client ID mismatch, expired refresh token, or wrong token type")
         return None
 
 def auto_refresh_token_if_needed(threshold_minutes: int = 55) -> str | None:
@@ -458,50 +447,3 @@ def get_qbo_runtime(user_id: int = USERID) -> Dict[str, Any]:
         "QUERY_URL": ctx["QUERY_URL"],
         "HEADERS": ctx["HEADERS"],
     }
-
-def debug_credential_sources() -> Dict[str, Any]:
-    """
-    Debug function to compare credential sources and identify mismatches.
-    """
-    result = {
-        "env_credentials": {
-            "client_id": os.getenv("QBO_CLIENT_ID", "NOT_SET")[:8] + "..." if os.getenv("QBO_CLIENT_ID") else "NOT_SET",
-            "client_secret": "SET" if os.getenv("QBO_CLIENT_SECRET") else "NOT_SET"
-        },
-        "db_credentials": None,
-        "migration_token": None,
-        "mismatch_detected": False
-    }
-    
-    try:
-        # Check database credentials
-        with _sql_conn() as conn:
-            cfg = _get_universal_config(conn)
-            if cfg:
-                result["db_credentials"] = {
-                    "client_id": cfg["client_id"][:8] + "..." if cfg["client_id"] else "NOT_SET",
-                    "client_secret": "SET" if cfg["client_secret"] else "NOT_SET",
-                    "environment": cfg["environment"]
-                }
-            
-            # Check migration token
-            token_row = _get_latest_user_token(conn, TABLES["migration"], USERID)
-            if token_row:
-                result["migration_token"] = {
-                    "realm_id": token_row["realm_id"],
-                    "has_access_token": bool(token_row["access_token"]),
-                    "has_refresh_token": bool(token_row["refresh_token"]),
-                    "created_at": str(token_row["created_at_utc"])
-                }
-        
-        # Check for mismatch
-        env_id = os.getenv("QBO_CLIENT_ID")
-        db_id = cfg["client_id"] if cfg else None
-        if env_id and db_id and env_id != db_id:
-            result["mismatch_detected"] = True
-            result["error"] = "Client ID mismatch between environment and database"
-    
-    except Exception as e:
-        result["error"] = str(e)
-    
-    return result

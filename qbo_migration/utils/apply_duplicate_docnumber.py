@@ -256,18 +256,38 @@ def apply_duplicate_docnumber_strategy_dynamic(
 
     df = df[[c for c in df.columns if c in needed_cols]].copy()
 
-    # Filter invalid DocNumbers (same as your original rules)
+    # Filter invalid DocNumbers and handle null/empty values separately
     if df.empty:
         logger.info("ℹ️ No rows found in target table; nothing to do.")
         return
 
+    # First, identify and handle null/empty DocNumbers by setting Duplicate_Docnumber to NULL
     df[docnumber_column] = df[docnumber_column].astype(str)
-    mask_valid = (
-        df[docnumber_column].notna()
-        & (df[docnumber_column].str.strip() != "")
-        & (df[docnumber_column].str.strip().str.lower() != "null")
+    mask_invalid = (
+        df[docnumber_column].isna()
+        | (df[docnumber_column].str.strip() == "")
+        | (df[docnumber_column].str.strip().str.lower() == "null")
+        | (df[docnumber_column].str.strip().str.lower() == "none")
+        | (df[docnumber_column] == "nan")
     )
-    df = df.loc[mask_valid].copy()
+    
+    # Set Duplicate_Docnumber to NULL for invalid DocNumbers
+    invalid_rows = df.loc[mask_invalid]
+    if not invalid_rows.empty:
+        invalid_source_ids = invalid_rows[source_id_column].tolist()
+        
+        # Update invalid rows to have NULL in Duplicate_Docnumber
+        for sid in invalid_source_ids:
+            sql.run_query(f"""
+                UPDATE [{schema}].[{target_table}]
+                SET {duplicate_column} = NULL
+                WHERE {source_id_column} = ?
+            """, (sid,))
+        
+        logger.info(f"ℹ️ Set {len(invalid_source_ids)} rows with null/empty DocNumbers to NULL in {duplicate_column}")
+    
+    # Now filter to only valid DocNumbers for processing
+    df = df.loc[~mask_invalid].copy()
     if df.empty:
         logger.info("ℹ️ No valid DocNumber rows to process; done.")
         return

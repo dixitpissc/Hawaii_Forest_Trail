@@ -338,7 +338,7 @@ def preload_maps(mapping_schema: str):
             if not dfm.empty:
                 return dict(zip(dfm["Source_Id"], dfm["Target_Id"]))
         return {}
-    for name in ["Vendor", "Account", "Item", "Class", "Department", "Term"]:
+    for name in ["Vendor", "Account", "Item", "Class", "Department", "Term", "Customer"]:
         maps[name] = load_map(name)
     return maps
 
@@ -357,8 +357,10 @@ def fetch_and_prepare_lines(source_schema: str, mapping_schema: str, bill_ids: l
         "ItemBasedExpenseLineDetail.ItemRef.value",
         "AccountBasedExpenseLineDetail.ClassRef.value",
         "AccountBasedExpenseLineDetail.DepartmentRef.value",
+        "AccountBasedExpenseLineDetail.CustomerRef.value",
         "ItemBasedExpenseLineDetail.ClassRef.value",
         "ItemBasedExpenseLineDetail.DepartmentRef.value",
+        BILL_LINE_MAPPING.get("MarkupInfo.Percent"),
         BILL_LINE_MAPPING.get("TaxCodeRef.value"),
         BILL_LINE_MAPPING.get("BillableStatus"),
         BILL_LINE_MAPPING.get("ItemBasedExpenseLineDetail.UnitPrice"),
@@ -391,16 +393,24 @@ def fetch_and_prepare_lines(source_schema: str, mapping_schema: str, bill_ids: l
     if "ItemBasedExpenseLineDetail.ItemRef.value" in lines.columns:
         lines["Mapped_ItemRef"] = lines["ItemBasedExpenseLineDetail.ItemRef.value"].astype(str).map(maps["Item"])
 
-    # Pre-map line-level class/department (both ABELD and IBELD)
+    # Pre-map line-level class/department/customer (both ABELD and IBELD)
     mapping_targets = [
         ("AccountBasedExpenseLineDetail.ClassRef.value", "Mapped_ABE_ClassRef"),
         ("AccountBasedExpenseLineDetail.DepartmentRef.value", "Mapped_ABE_DepartmentRef"),
+        ("AccountBasedExpenseLineDetail.CustomerRef.value", "Mapped_ABE_CustomerRef"),
         ("ItemBasedExpenseLineDetail.ClassRef.value", "Mapped_IBE_ClassRef"),
         ("ItemBasedExpenseLineDetail.DepartmentRef.value", "Mapped_IBE_DepartmentRef"),
     ]
     for src_col, out_col in mapping_targets:
         if src_col in lines.columns:
-            key = "Class" if "ClassRef" in src_col else "Department"
+            if "ClassRef" in src_col:
+                key = "Class"
+            elif "DepartmentRef" in src_col:
+                key = "Department"
+            elif "CustomerRef" in src_col:
+                key = "Customer"
+            else:
+                continue
             lines[out_col] = lines[src_col].astype(str).map(maps[key])
 
     # Group once
@@ -483,19 +493,25 @@ def ensure_mapping_table(BILL_DATE_FROM='1900-01-01',BILL_DATE_TO='2080-12-31'):
 
     # NEW: TaxCode mapping (optional but preferred)
     if sql.table_exists("Map_TaxCode", MAPPING_SCHEMA):
-        taxcode_map = sql.fetch_table_with_params(
-            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_TaxCode]", tuple()
+        taxcode_map = sql.fetch_dataframe(
+            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_TaxCode]"
         )
-        taxcode_dict = dict(zip(taxcode_map["Source_Id"], taxcode_map["Target_Id"]))
+        if not taxcode_map.empty:
+            taxcode_dict = dict(zip(taxcode_map["Source_Id"], taxcode_map["Target_Id"]))
+        else:
+            taxcode_dict = {}
     else:
         taxcode_dict = {}
 
     # NEW: Taxrate mapping (optional but preferred)
     if sql.table_exists("Map_TaxRate", MAPPING_SCHEMA):
-        taxrate_map = sql.fetch_table_with_params(
-            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_TaxRate]", tuple()
+        taxrate_map = sql.fetch_dataframe(
+            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_TaxRate]"
         )
-        taxrate_dict = dict(zip(taxrate_map["Source_Id"], taxrate_map["Target_Id"]))
+        if not taxrate_map.empty:
+            taxrate_dict = dict(zip(taxrate_map["Source_Id"], taxrate_map["Target_Id"]))
+        else:
+            taxrate_dict = {}
     else:
         taxrate_dict = {}
 
@@ -688,11 +704,42 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
     if lines_df is None or lines_df.empty:
         return None
 
-    # Faster iteration
-    it = lines_df.itertuples(index=False, name="Ln")
+    # Faster iteration with index tracking for DataFrame access
+    it = lines_df.itertuples(index=True, name="Ln")  # Include index for DataFrame access
     detail_type_col = BILL_LINE_MAPPING["DetailType"]
     amount_col = BILL_LINE_MAPPING["Amount"]
     desc_col = BILL_LINE_MAPPING.get("Description")
+
+    # Get the actual column names from the DataFrame for BillableStatus and MarkupInfo fields
+    abe_billable_col = None
+    ibe_billable_col = None
+    abe_markup_col = None
+    
+    for col in lines_df.columns:
+        if "AccountBasedExpenseLineDetail" in col and "BillableStatus" in col:
+            abe_billable_col = col
+        elif "ItemBasedExpenseLineDetail" in col and "BillableStatus" in col:
+            ibe_billable_col = col
+        elif "AccountBasedExpenseLineDetail" in col and "MarkupInfo" in col and "Percent" in col:
+            abe_markup_col = col
+
+    # Create a mapping from column names to namedtuple field positions
+    sample_row = next(iter(lines_df.itertuples(index=True, name="Ln")), None)
+    if sample_row:
+        column_to_field = {}
+        for i, col in enumerate(lines_df.columns):
+            if i < len(sample_row._fields) - 1:  # -1 because first field is Index
+                field_name = sample_row._fields[i + 1]  # +1 to skip Index field
+                column_to_field[col] = field_name
+        
+        # Get the actual field names for our target columns
+        abe_billable_field = column_to_field.get(abe_billable_col)
+        ibe_billable_field = column_to_field.get(ibe_billable_col)
+        abe_markup_field = column_to_field.get(abe_markup_col)
+    else:
+        abe_billable_field = None
+        ibe_billable_field = None
+        abe_markup_field = None
 
     for ln in it:
         detail_type = getattr(ln, detail_type_col)
@@ -718,19 +765,45 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
                 v = getattr(ln, tax_col)
                 if pd.notna(v):
                     detail["TaxCodeRef"] = {"value": v}
-            bill_col = BILL_LINE_MAPPING.get("BillableStatus")
-            if bill_col and hasattr(ln, bill_col):
-                v = getattr(ln, bill_col)
-                if pd.notna(v):
-                    detail["BillableStatus"] = v
+            
+            # Handle BillableStatus
+            if abe_billable_field and hasattr(ln, abe_billable_field):
+                abe_bill_status = getattr(ln, abe_billable_field)
+                if pd.notna(abe_bill_status):
+                    detail["BillableStatus"] = abe_bill_status
+            elif abe_billable_col:
+                # Fallback to DataFrame access using row index
+                row_idx = ln.Index
+                abe_bill_status = lines_df.iloc[row_idx][abe_billable_col]
+                if pd.notna(abe_bill_status):
+                    detail["BillableStatus"] = abe_bill_status
 
-            # Pre-mapped class/department (optional)
+            # Pre-mapped class/department/customer (optional)
             cls_val = _norm_id(getattr(ln, "Mapped_ABE_ClassRef", None))
             if cls_val:
                 detail["ClassRef"] = {"value": cls_val}
             dep_val = _norm_id(getattr(ln, "Mapped_ABE_DepartmentRef", None))
             if dep_val:
                 detail["DepartmentRef"] = {"value": dep_val}
+            cust_val = _norm_id(getattr(ln, "Mapped_ABE_CustomerRef", None))
+            if cust_val:
+                detail["CustomerRef"] = {"value": cust_val}
+
+            # Handle MarkupInfo.Percent
+            markup_percent = None
+            if abe_markup_field and hasattr(ln, abe_markup_field):
+                markup_percent = getattr(ln, abe_markup_field)
+            elif abe_markup_col:
+                # Fallback to DataFrame access using row index
+                row_idx = ln.Index
+                markup_percent = lines_df.iloc[row_idx][abe_markup_col]
+            
+            if markup_percent is not None and pd.notna(markup_percent):
+                try:
+                    markup_val = float(markup_percent)
+                    detail["MarkupInfo"] = {"Percent": markup_val}
+                except (ValueError, TypeError):
+                    pass  # Skip invalid values
 
             base_line["AccountBasedExpenseLineDetail"] = detail
 
@@ -742,7 +815,8 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
                 continue
             detail = {"ItemRef": {"value": item_target}}
 
-            for f in ["UnitPrice", "Qty", "TaxCodeRef.value", "BillableStatus"]:
+            # Handle UnitPrice, Qty, TaxCodeRef, and BillableStatus
+            for f in ["UnitPrice", "Qty", "TaxCodeRef.value"]:
                 src = BILL_LINE_MAPPING.get(f"ItemBasedExpenseLineDetail.{f}")
                 if src and hasattr(ln, src):
                     val = getattr(ln, src)
@@ -752,6 +826,18 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
                             detail[key] = {"value": val}
                         else:
                             detail[f] = val
+            
+            # Handle BillableStatus
+            if ibe_billable_field and hasattr(ln, ibe_billable_field):
+                ibe_bill_status = getattr(ln, ibe_billable_field)
+                if pd.notna(ibe_bill_status):
+                    detail["BillableStatus"] = ibe_bill_status
+            elif ibe_billable_col:
+                # Fallback to DataFrame access using row index
+                row_idx = ln.Index
+                ibe_bill_status = lines_df.iloc[row_idx][ibe_billable_col]
+                if pd.notna(ibe_bill_status):
+                    detail["BillableStatus"] = ibe_bill_status
 
             # Optional class/department (only if clean numeric)
             cls_val = _norm_id(getattr(ln, "Mapped_IBE_ClassRef", None))
