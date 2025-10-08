@@ -468,6 +468,7 @@ def build_payload(row, lines):
         "DocNumber": row.get("Duplicate_Docnumber") or row.get(INVOICE_HEADER_MAPPING["DocNumber"]),
         "TxnDate": row.get(INVOICE_HEADER_MAPPING["TxnDate"]),
         "DueDate": row.get(INVOICE_HEADER_MAPPING["DueDate"]),
+        "FreeFormAddress" : row.get(INVOICE_HEADER_MAPPING["FreeFormAddress"]),
         "CustomerRef": {"value": str(row.get("Mapped_CustomerRef"))},
         "EmailStatus": row.get(INVOICE_HEADER_MAPPING["EmailStatus"]),
         "ApplyTaxAfterDiscount": bool(row.get(INVOICE_HEADER_MAPPING["ApplyTaxAfterDiscount"])),
@@ -479,6 +480,7 @@ def build_payload(row, lines):
         # "TotalAmt": safe_float(row.get("TotalAmt")),
         # "HomeTotalAmt": safe_float(row.get("HomeTotalAmt")),
         # "GlobalTaxCalculation": row.get("GlobalTaxCalculation", "")
+        
     }
     # prune Nones
     payload = {k: v for k, v in payload.items() if v is not None}
@@ -498,8 +500,17 @@ def build_payload(row, lines):
         bill_email = _nonempty_str(row.get("BillEmail_Address"))
         if bill_email:
             payload["BillEmail"] = {"Address": bill_email}
+    else:
+        bill_email = _nonempty_str(row.get("BillEmail_Address"))
+        if bill_email:
+            payload["BillEmail"] = {"Address": bill_email}
 
-
+    bill_bcc = row.get("BillEmailBcc_Address")
+    if bill_bcc:
+        payload["BillEmailBcc"] = {"Address": bill_bcc}
+    bill_cc = row.get("BillEmailCc.Address")
+    if bill_cc:
+        payload["BillEmailCc"] = {"Address": bill_cc}
 
     def _nonempty(val):
         if val is None or pd.isna(val):
@@ -536,6 +547,18 @@ def build_payload(row, lines):
     ship = {k: v for k, v in ship.items() if v is not None}
     if ship:
         payload["ShipAddr"] = ship
+
+    # NEW: Add ShipFromAddr using the same logic as BillAddr and ShipAddr
+    shipfrom = {
+        "Line1": _nonempty(row.get("ShipFromAddr_Line1")),
+        "Line2": _nonempty(row.get("ShipFromAddr_Line2")),
+        "Line3": _nonempty(row.get("ShipFromAddr_Line3")),
+        "Line4": _nonempty(row.get("ShipFromAddr_Line4")),
+        "Line5": _nonempty(row.get("ShipFromAddr_Line5")),
+    }
+    shipfrom = {k: v for k, v in shipfrom.items() if v is not None}
+    if shipfrom:
+        payload["ShipFromAddr"] = shipfrom
 
     if row.get("Mapped_TermRef"):
         payload["SalesTermRef"] = {"value": str(row.get("Mapped_TermRef"))}
@@ -609,8 +632,30 @@ def build_payload(row, lines):
                 "TaxCodeRef": {"value": ln.get(SALES_ITEM_LINE_MAPPING["SalesItemLineDetail.TaxCodeRef.value"]) or "NON"},
             }
             
+            # Add ItemAccountRef if present in source and mapped
+            item_account_source = ln.get("SalesItemLineDetail.ItemAccountRef.value")
+            item_account_target = account_dict.get(item_account_source)
+            if item_account_target:
+                detail["ItemAccountRef"] = {"value": str(item_account_target)}
+            
             if class_id:
                 detail["ClassRef"] = {"value": str(class_id)}
+
+                            # Add MarkupInfo if any relevant fields are present
+            markup_info = {}
+            percent_based = ln.get("SalesItemLineDetail.MarkupInfo.PercentBased")
+            value = ln.get("SalesItemLineDetail.MarkupInfo.Value")
+            markup_acct_source = ln.get("SalesItemLineDetail.MarkupInfo.MarkUpIncomeAccountRef.value")
+            markup_acct_target = account_dict.get(markup_acct_source)
+            if percent_based is not None:
+                markup_info["PercentBased"] = percent_based
+            if value is not None:
+                markup_info["Value"] = value
+            if markup_acct_target:
+                markup_info["MarkUpIncomeAccountRef"] = {"value": str(markup_acct_target)}
+            if markup_info:
+                detail["MarkupInfo"] = markup_info
+
         elif detail_type == "SubTotalLineDetail":
             item_id = item_dict.get(ln.get(SUBTOTAL_LINE_MAPPING["SubTotalLineDetail.ItemRef.value"]))
             if item_id:
@@ -834,7 +879,7 @@ def _post_batch_invoices(eligible_batch, url, headers, timeout=40, post_batch_li
                     for (sid, payload) in chunk
                 ]
             }
-            return '' #session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
 
         attempted_refresh = False
         for attempt in range(max_manual_retries + 1):

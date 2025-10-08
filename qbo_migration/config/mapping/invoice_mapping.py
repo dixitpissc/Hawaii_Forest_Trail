@@ -5,6 +5,8 @@ INVOICE_HEADER_MAPPING = {
     "CustomerRef.value": "CustomerRef.value",
     "CurrencyRef.value": "CurrencyRef.value",
     "DepartmentRef.value":"DepartmentRef.value",
+    "FreeFormAddress":"FreeFormAddress",
+
     # Billing Address
     "BillAddr.Line1": "BillAddr.Line1",
     "BillAddr.Line2": "BillAddr.Line2",
@@ -42,6 +44,17 @@ INVOICE_HEADER_MAPPING = {
     "PrivateNote": "PrivateNote",
     "CustomerMemo.value": "CustomerMemo.value",
 
+    #
+    "BillEmailBcc.Address":"BillEmailBcc.Address",
+    "BillEmailCc.Address":"BillEmailCc.Address",
+
+    #Ship From address
+    "ShipFromAddr.Line1":"ShipFromAddr.Line1",
+    "ShipFromAddr.Line2":"ShipFromAddr.Line2",
+    "ShipFromAddr.Line3":"ShipFromAddr.Line3",
+    "ShipFromAddr.Line4":"ShipFromAddr.Line4",
+    "ShipFromAddr.Line5":"ShipFromAddr.Line5",
+
     # Accounting
     "GlobalTaxCalculation" : "GlobalTaxCalculation",
     "ApplyTaxAfterDiscount": "ApplyTaxAfterDiscount",
@@ -56,18 +69,43 @@ INVOICE_HEADER_MAPPING = {
     "TrackingNum" : "TrackingNum",
 }
 
+#Old
+# SALES_ITEM_LINE_MAPPING = {
+#     "LineNum": "LineNum",
+#     "Amount": "Amount",
+#     "Description": "Description",
+#     "DetailType": "DetailType",
+#     "SalesItemLineDetail.ItemRef.value": "SalesItemLineDetail.ItemRef.value",
+#     "SalesItemLineDetail.UnitPrice": "SalesItemLineDetail.UnitPrice",
+#     "SalesItemLineDetail.Qty": "SalesItemLineDetail.Qty",
+#     "SalesItemLineDetail.ServiceDate": "SalesItemLineDetail.ServiceDate",
+#     "SalesItemLineDetail.TaxCodeRef.value": "SalesItemLineDetail.TaxCodeRef.value",
+#     "SalesItemLineDetail.ClassRef.value": "SalesItemLineDetail.ClassRef.value",
+#     "SalesItemLineDetail.ItemAccountRef.value" : "SalesItemLineDetail.ItemAccountRef.value",
+#     "SalesItemLineDetail.TaxClassificationRef.value":"SalesItemLineDetail.TaxClassificationRef.value"
+
+# }
+
 SALES_ITEM_LINE_MAPPING = {
-    "LineNum": "LineNum",
+    # Generic line fields
+    "LineNum": "LineNum",                      
     "Amount": "Amount",
     "Description": "Description",
-    "DetailType": "DetailType",
-    "SalesItemLineDetail.ItemRef.value": "SalesItemLineDetail.ItemRef.value",
+    "DetailType": "DetailType",                
+    # SalesItemLineDetail core
+    "SalesItemLineDetail.ItemRef.value": "SalesItemLineDetail.ItemRef.value",   
     "SalesItemLineDetail.UnitPrice": "SalesItemLineDetail.UnitPrice",
     "SalesItemLineDetail.Qty": "SalesItemLineDetail.Qty",
     "SalesItemLineDetail.ServiceDate": "SalesItemLineDetail.ServiceDate",
     "SalesItemLineDetail.TaxCodeRef.value": "SalesItemLineDetail.TaxCodeRef.value",
-    "SalesItemLineDetail.ClassRef.value": "SalesItemLineDetail.ClassRef.value"
+    "SalesItemLineDetail.ClassRef.value": "SalesItemLineDetail.ClassRef.value",
+    "SalesItemLineDetail.ItemAccountRef.value" : "SalesItemLineDetail.ItemAccountRef.value",
+    # MarkupInfo (supported on create)
+    "SalesItemLineDetail.MarkupInfo.PercentBased": "SalesItemLineDetail.MarkupInfo.PercentBased",
+    "SalesItemLineDetail.MarkupInfo.Value": "SalesItemLineDetail.MarkupInfo.Value",
+    "SalesItemLineDetail.MarkupInfo.MarkUpIncomeAccountRef.value": "SalesItemLineDetail.MarkupInfo.MarkUpIncomeAccountRef.value",
 }
+
 
 # Mapping for GroupLineDetail
 GROUP_LINE_MAPPING = {
