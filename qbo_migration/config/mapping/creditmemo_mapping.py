@@ -8,36 +8,44 @@ CREDITMEMO_HEADER_MAPPING = {
     "ApplyTaxAfterDiscount": "ApplyTaxAfterDiscount",
     "PrintStatus": "PrintStatus",
     "EmailStatus": "EmailStatus",
-    "BillEmail.Address": "BillEmail.Address",
+    "BillEmail.Address": "BillEmail_Address",
+    "BillEmailBcc.Address": "BillEmailBcc.Address",
     "CustomerMemo.value": "CustomerMemo.value",
     "PrivateNote": "PrivateNote",
     "TotalAmt": "TotalAmt",
     "RemainingCredit": "RemainingCredit",
     "Balance": "Balance",
     "DepartmentRef.value" : "DepartmentRef.value",
+    "ShipDate": "ShipDate",
 
     # Bill Address Fields
     "BillAddr.Id": "BillAddr.Id",
-    "BillAddr.Line1": "BillAddr.Line1",
-    "BillAddr.Line2": "BillAddr.Line2",
-    "BillAddr.Line3": "BillAddr.Line3",
-    "BillAddr.Line4": "BillAddr.Line4",
-    "BillAddr.Line5": "BillAddr.Line5",
-    "BillAddr.City": "BillAddr.City",
-    "BillAddr.Country": "BillAddr.Country",
-    "BillAddr.CountrySubDivisionCode": "BillAddr.CountrySubDivisionCode",
-    "BillAddr.PostalCode": "BillAddr.PostalCode",
+    "BillAddr.Line1": "BillAddr_Line1",
+    "BillAddr.Line2": "BillAddr_Line2",
+    "BillAddr.Line3": "BillAddr_Line3",
+    "BillAddr.Line4": "BillAddr_Line4",
+    "BillAddr.Line5": "BillAddr_Line5",
+    "BillAddr.City": "BillAddr_City",
+    "BillAddr.Country": "BillAddr_Country",
+    "BillAddr.CountrySubDivisionCode": "BillAddr_CountrySubDivisionCode",
+    "BillAddr.PostalCode": "BillAddr_PostalCode",
 
     # Ship Address Fields
     "ShipAddr.Id": "ShipAddr.Id",
-    "ShipAddr.Line1": "ShipAddr.Line1",
-    "ShipAddr.Line2": "ShipAddr.Line2",
-    "ShipAddr.Line3": "ShipAddr.Line3",
-    "ShipAddr.Line4": "ShipAddr.Line4",
-    "ShipAddr.City": "ShipAddr.City",
-    "ShipAddr.Country": "ShipAddr.Country",
-    "ShipAddr.CountrySubDivisionCode": "ShipAddr.CountrySubDivisionCode",
-    "ShipAddr.PostalCode": "ShipAddr.PostalCode"
+    "ShipAddr.Line1": "ShipAddr_Line1",
+    "ShipAddr.Line2": "ShipAddr_Line2",
+    "ShipAddr.Line3": "ShipAddr_Line3",
+    "ShipAddr.Line4": "ShipAddr_Line4",
+    "ShipAddr.City": "ShipAddr_City",
+    "ShipAddr.Country": "ShipAddr_Country",
+    "ShipAddr.CountrySubDivisionCode": "ShipAddr_CountrySubDivisionCode",
+    "ShipAddr.PostalCode": "ShipAddr_PostalCode",
+
+    # Ship-from (Address) — supported on sales forms
+    "ShipFromAddr.Id": "ShipFromAddr.Id",
+    "ShipFromAddr.Line1": "ShipFromAddr_Line1",
+    "ShipFromAddr.Line2": "ShipFromAddr_Line2",
+    "ShipFromAddr.Line3": "ShipFromAddr_Line3"
 }
 
 
