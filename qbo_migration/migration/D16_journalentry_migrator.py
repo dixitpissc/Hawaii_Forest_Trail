@@ -2,12 +2,12 @@
 Sequence : 16
 Module: JournalEntry_migrator.py
 Author: Dixit Prajapati
-Created: 2025-09-15
+Created: 2025-10-09
 Description: Handles migration of JournalEntry records from QBO to QBO.
 Production : Ready
 Development : Require when necessary
 Phase : 02 - Multi User + Tax
-"""
+""" 
 
 
 import os, json, requests, pandas as pd
@@ -24,6 +24,7 @@ from config.mapping.journalentry_mapping import (
     JOURNALENTRY_HEADER_MAPPING as HEADER_MAP,
     JOURNALENTRY_LINE_MAPPING as LINE_MAP,
 )
+from utils.payload_cleaner import deep_clean
 
 # --------------------------- Global Init ---------------------------
 load_dotenv()
@@ -478,6 +479,11 @@ def build_payload(row, lines):
             else:
                 payload[qbo_field] = val
 
+    # Add PrivateNote at header level if present
+    private_note = row.get("PrivateNote")
+    if pd.notna(private_note):
+        payload["PrivateNote"] = private_note
+
     # ---------- Fallbacks and defaults ----------
     if not payload.get("CurrencyRef"):
         payload["CurrencyRef"] = {"value": row.get("Mapped_CurrencyRef", "USD")}
@@ -551,7 +557,7 @@ def build_payload(row, lines):
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
 
-    return payload if payload["Line"] else None
+    return deep_clean(payload) if payload["Line"] else None
 
 # --------------------------- Payload Generation ---------------------------
 def generate_journalentry_payloads_in_batches(batch_size=1000):
@@ -610,88 +616,6 @@ def generate_journalentry_payloads_in_batches(batch_size=1000):
             update_mapping_status(MAPPING_SCHEMA, "Map_JournalEntry", sid, "Ready", payload=payload)
 
         logger.info(f"📦 Batch processed: {len(df)} payloads")
-
-# def _sleep_with_jitter(attempt=0):
-#     base = 0.5 + attempt * 0.5
-#     time.sleep(base + random.uniform(0, 0.5))
-
-# def _post_batch_journalentries(eligible_batch, url, headers, timeout=20, max_manual_retries=2):
-#     successes, failures = [], []
-#     parsed = {}
-#     for _, r in eligible_batch.iterrows():
-#         sid = r["Source_Id"]
-#         if r.get("Porter_Status") == "Success" or int(r.get("Retry_Count") or 0) >= 5 or not r.get("Payload_JSON"):
-#             continue
-#         try:
-#             parsed[sid] = json.loads(r["Payload_JSON"])
-#         except Exception as e:
-#             failures.append((f"Bad JSON: {e}", sid))
-#     for _, r in eligible_batch.iterrows():
-#         sid = r["Source_Id"]
-#         payload = parsed.get(sid)
-#         if payload is None:
-#             continue
-#         attempted_refresh = False
-#         for attempt in range(max_manual_retries + 1):
-#             try:
-#                 resp = session.post(url, headers=headers, json=payload, timeout=timeout)
-#                 sc = resp.status_code
-#                 if sc == 200:
-#                     qid = None
-#                     try:
-#                         qid = resp.json().get("JournalEntry", {}).get("Id")
-#                     except Exception:
-#                         pass
-#                     if qid:
-#                         successes.append((qid, sid))
-#                         logger.info(f"✅ Posted JournalEntry {sid} → Target ID {qid}")
-#                     else:
-#                         failures.append(("No Id in response", sid))
-#                         logger.info(f"❌ Posted JournalEntry {sid} → No Id in response")
-#                     break
-#                 elif sc in (401, 403) and not attempted_refresh:
-#                     attempted_refresh = True
-#                     try:
-#                         auto_refresh_token_if_needed(force=True)
-#                     except Exception:
-#                         pass
-#                     url, headers = get_qbo_auth()
-#                     _sleep_with_jitter(attempt=attempt)
-#                     continue
-#                 elif sc in (429, 500, 502, 503, 504) and attempt < max_manual_retries:
-#                     _sleep_with_jitter(attempt=attempt)
-#                     continue
-#                 else:
-#                     failures.append((resp.text[:300], sid))
-#                     logger.info(f"❌ Posted JournalEntry {sid} → Failed with status {sc}")
-#                     break
-#             except requests.Timeout:
-#                 if attempt < max_manual_retries:
-#                     _sleep_with_jitter(attempt=attempt)
-#                     continue
-#                 failures.append(("Timeout", sid))
-#                 break
-#             except Exception as e:
-#                 if attempt < max_manual_retries:
-#                     _sleep_with_jitter(attempt=attempt)
-#                     continue
-#                 failures.append((str(e), sid))
-#                 break
-#     return successes, failures
-
-# def _apply_batch_updates_journalentry(successes, failures):
-#     from sys import modules
-#     mod = modules[__name__]
-#     if successes:
-#         mod.executemany(
-#             f"UPDATE [{MAPPING_SCHEMA}].[Map_JournalEntry] SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL WHERE Source_Id=?",
-#             [(qid, sid) for qid, sid in successes]
-#         )
-#     if failures:
-#         mod.executemany(
-#             f"UPDATE [{MAPPING_SCHEMA}].[Map_JournalEntry] SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? WHERE Source_Id=?",
-#             [(reason, sid) for reason, sid in failures]
-#         )
 
 # ---------- helpers (shared) ----------
 try:
