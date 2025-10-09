@@ -2,7 +2,7 @@
 # Sequence : 10
 # Module: customer_migrator.py
 # Author: Dixit Prajapati
-# Created: 2025-10-01
+# Created: 2025-10-09
 # Description: Handles migration of customer records from source system to QBO,
 #              including parent-child hierarchy processing, retry logic, and status tracking.
 # Production : Ready
@@ -64,6 +64,37 @@ session.mount("http://", _adapter)
 # ────────────────────────────────────────────────────────────────────
 
 def _try_exact_lookup_customer_id(name: str) -> str | None:
+    """Exact match by DisplayName; includes inactive (deleted) customers."""
+    if not name:
+        return None
+    safe = name.replace("'", "''")
+    q = f"SELECT Id FROM Customer WHERE DisplayName = '{safe}' AND Active IN (true,false)"
+    r, ok, _ = qbo_query(query_url, q, access_token)
+    if not ok:
+        return None
+    items = r.json().get("QueryResponse", {}).get("Customer", [])
+    if items:
+        return items[0].get("Id")
+    return None
+
+
+def _try_exact_lookup_customer_id_by_fqn(fqn: str) -> str | None:
+    """Exact match by FullyQualifiedName; includes inactive (deleted) customers."""
+    if not fqn:
+        return None
+    safe = fqn.replace("'", "''")
+    q = f"SELECT Id FROM Customer WHERE FullyQualifiedName = '{safe}' AND Active IN (true,false)"
+    r, ok, _ = qbo_query(query_url, q, access_token)
+    if not ok:
+        return None
+    items = r.json().get("QueryResponse", {}).get("Customer", [])
+    if items:
+        return items[0].get("Id")
+    return None
+
+
+
+def _try_exact_lookup_customer_id(name: str) -> str | None:
     """Fast path: exact match DisplayName lookup; falls back to None if not found or parser fails."""
     if not name:
         return None
@@ -77,6 +108,71 @@ def _try_exact_lookup_customer_id(name: str) -> str | None:
     if items:
         return items[0].get("Id")
     return None
+
+
+_DELETED_PAT = re.compile(r"\s*\(deleted\)\s*\d*$", re.IGNORECASE)
+
+def _is_deleted_style(name: str | None) -> bool:
+    if not name:
+        return False
+    return bool(_DELETED_PAT.search(name.strip()))
+
+def _strip_deleted_suffix(name: str) -> str:
+    """Remove ' (deleted)' or ' (deleted) N' suffix to get the base name."""
+    if not name:
+        return ""
+    return _DELETED_PAT.sub("", name).strip()
+
+def _recover_deleted_style_id_by_displayname(display_name: str) -> str | None:
+    """
+    Resolve an Id for DisplayName that contains '(deleted)'.
+    Strategy:
+      1) Exact match (includes inactive).
+      2) If not found, search LIKE '<base> (deleted%' and choose the closest (prefer exact text if present),
+         else fall back to the first result.
+    """
+    exact = _try_exact_lookup_customer_id(display_name)
+    if exact:
+        return exact
+
+    base = _strip_deleted_suffix(display_name)
+    if not base:
+        return None
+
+    # Pull a page of candidates; include inactive; search by LIKE to catch numbered variants.
+    # We’ll scan pages until none remain or we find a best match.
+    start_pos, page_size = 1, 1000
+    like_safe = base.replace("'", "''")
+    while True:
+        q = f"""
+            SELECT Id, DisplayName, FullyQualifiedName, Active
+            FROM Customer
+            WHERE DisplayName LIKE '{like_safe} (deleted%'
+              AND Active IN (true,false)
+            ORDERBY DisplayName
+            STARTPOSITION {start_pos}
+            MAXRESULTS {page_size}
+        """
+        r, ok, _ = qbo_query(query_url, _normalize_query(q), access_token)
+        if not ok:
+            return None
+        items = r.json().get("QueryResponse", {}).get("Customer", [])
+        if not items:
+            return None
+
+        # Prefer exact textual match (case-insensitive); otherwise take first candidate.
+        target_norm = _norm_name(display_name)
+        for it in items:
+            if _norm_name(it.get("DisplayName")) == target_norm:
+                return it.get("Id")
+
+        # If no exact textual match in this page, take the first item from first page as a fallback.
+        # (But only if this is the first page; otherwise keep paging to look for an exact match.)
+        if start_pos == 1 and items:
+            return items[0].get("Id")
+
+        start_pos += page_size
+
 
 def _norm_name(s: str) -> str:
     if s is None: return ""
@@ -246,19 +342,6 @@ def preload_term_map():
         _term_map = {}
         logger.warning(f"Term preload failed: {e}")
 
-# def backfill_target_term_ids_into_map_customer():
-#     try:
-#         sql.run_query(f"""
-#             UPDATE MC
-#             SET MC.Target_Term_Id = MT.Target_Id
-#             FROM [{mapping_schema}].[{mapping_table}] MC
-#             LEFT JOIN [{mapping_schema}].[Map_Term] MT
-#               ON TRY_CONVERT(VARCHAR(100), MC.[SalesTermRef.value]) = TRY_CONVERT(VARCHAR(100), MT.Source_Id)
-#             WHERE MC.Target_Term_Id IS NULL
-#               AND MC.[SalesTermRef.value] IS NOT NULL
-#         """)
-#     except Exception as e:
-#         logger.warning(f"Backfill Target_Term_Id failed: {e}")
 
 def backfill_target_term_ids_into_map_customer():
     try:
@@ -582,34 +665,32 @@ def _bulk_update_payloads(updates):
         DROP TABLE [{mapping_schema}].[{staging}];
     """)
 
-# ────────────────────────────────────────────────────────────────────
-# Posting (per-record; existence only on duplicate error)
-# ────────────────────────────────────────────────────────────────────
+
 def post_staged_customers(level=None, phase=None):
     """
     Post staged customer payloads to QBO.
-    
+
     Args:
         level: Specific level to process (e.g., None, 1, 2, etc.)
-        phase: Legacy parameter - 'parent' to process only parent customers (ParentRef.value IS NULL)
-               'child' to process only child customers (ParentRef.value IS NOT NULL)
-               None to process all customers
+        phase: 'parent' to process only parent customers (ParentRef.value IS NULL)
+               'child'  to process only child customers (ParentRef.value IS NOT NULL)
+               None     to process all customers
     """
     # Build WHERE clause based on level or phase
     where_clause = "WHERE Porter_Status IN ('Ready','Failed') AND Payload_JSON IS NOT NULL"
-    
+
     if level is None:
         where_clause += " AND ([Level] IS NULL)"
     elif level is not None:
-        # Handle numeric levels (convert to string for SQL comparison)
         where_clause += f" AND [Level] = '{level}'"
     elif phase == 'parent':
         where_clause += " AND ([ParentRef.value] IS NULL OR LTRIM(RTRIM([ParentRef.value])) = '')"
     elif phase == 'child':
         where_clause += " AND [ParentRef.value] IS NOT NULL AND LTRIM(RTRIM([ParentRef.value])) != ''"
-    
+
+    # NOTE: include FullyQualifiedName so we can resolve dupes deterministically
     df = sql.fetch_dataframe(f"""
-        SELECT Source_Id, Payload_JSON
+        SELECT Source_Id, Payload_JSON, FullyQualifiedName
         FROM [{mapping_schema}].[{mapping_table}]
         {where_clause}
     """)
@@ -623,67 +704,135 @@ def post_staged_customers(level=None, phase=None):
     phase_msg = f" {phase}" if phase and not level_msg else ""
     logger.info(f"📤 Posting {len(df)}{level_msg}{phase_msg} customer(s) to QBO...")
     timer = ProgressTimer(len(df))
+
     for row in df.itertuples(index=False):
-        source_id, payload_json = row
+        source_id, payload_json, fqn_hint = row
         try:
             payload = loads_fast(payload_json) if isinstance(payload_json, str) else payload_json
             r = session.post(post_url, headers=headers, json=payload)
 
             if r.status_code == 200:
                 target_id = r.json()["Customer"]["Id"]
-                update_mapping_status(mapping_schema, mapping_table, source_id, "Success", target_id=target_id)
-                timer.update(); continue
+                update_mapping_status(
+                    mapping_schema, mapping_table, source_id,
+                    "Success", target_id=target_id
+                )
+                timer.update()
+                continue
 
             code, msg, det = _parse_qbo_error(r)
 
-            # Duplicate name handling (only now → huge perf savings)
-            # Duplicate name handling — always resolve and store Target_Id
+            # Duplicate name → resolve using FQN-first
             if str(code) == "6240" or (msg and "Duplicate Name" in msg):
-                existing_id = _recover_customer_id_by_name(payload)  # always try now
+                existing_id = _recover_customer_id(payload, fqn_hint=fqn_hint)
                 if existing_id:
-                    update_mapping_status(mapping_schema, mapping_table, source_id,
-                                        "Exists", target_id=existing_id, payload=payload)
+                    update_mapping_status(
+                        mapping_schema, mapping_table, source_id,
+                        "Exists", target_id=existing_id, payload=payload
+                    )
                 else:
-                    # Fallback: still mark Exists to avoid re-post loops, but note missing id
-                    update_mapping_status(mapping_schema, mapping_table, source_id,
-                                        "Exists", payload=payload,
-                                        failure_reason="Duplicate name; could not resolve existing Id")
-                timer.update(); continue
+                    update_mapping_status(
+                        mapping_schema, mapping_table, source_id,
+                        "Exists", payload=payload,
+                        failure_reason="Duplicate name; could not resolve Id via FQN"
+                    )
+                timer.update()
+                continue
 
             # Other errors → Failed
-            update_mapping_status(mapping_schema, mapping_table, source_id, "Failed",
-                                  failure_reason=f"code={code} | msg={msg} | detail={det}", increment_retry=True)
+            update_mapping_status(
+                mapping_schema, mapping_table, source_id,
+                "Failed",
+                failure_reason=f"code={code} | msg={msg} | detail={det}",
+                increment_retry=True
+            )
         except Exception as e:
-            update_mapping_status(mapping_schema, mapping_table, source_id, "Failed", failure_reason=str(e), increment_retry=True)
+            update_mapping_status(
+                mapping_schema, mapping_table, source_id,
+                "Failed", failure_reason=str(e), increment_retry=True
+            )
         timer.update()
 
-def _recover_customer_id_by_name(payload: dict) -> str | None:
-    """
-    Resolve existing QBO Customer Id by name for duplicate handling.
-    Tries exact WHERE match first (fast), then falls back to the robust page-scan.
-    """
-    name = _best_name_from_payload(payload)
-    if not name:
-        return None
 
-    # 1) Fast exact lookup
-    cid = _try_exact_lookup_customer_id(name)
-    if cid:
-        return cid
+def _recover_customer_id(payload: dict, fqn_hint: str | None = None) -> str | None:
+    """
+    Resolve existing QBO Customer Id, prioritizing FullyQualifiedName (FQN).
+    Special-case: if DisplayName looks like '(... deleted ...)', use a deleted-name resolver.
+    Order (non-deleted):
+      1) fqn_hint (from mapping)
+      2) reconstruct FQN via ParentRef + DisplayName
+      3) top-level FQN == DisplayName
+      4) exact DisplayName
+      5) paged scan (FQN, then DisplayName)
+    """
+    display_name = payload.get("DisplayName")
 
-    # 2) Robust page-scan (handles apostrophes / NBSP, etc.)
-    target = _norm_name(name)
-    start_pos, page_size = 1, 1000
-    while True:
-        q = f"SELECT Id, DisplayName, Active FROM Customer ORDERBY DisplayName STARTPOSITION {start_pos} MAXRESULTS {page_size}"
+    # 🔸 Special-case branch for deleted-style names
+    if _is_deleted_style(display_name):
+        cid = _recover_deleted_style_id_by_displayname(display_name)
+        if cid:
+            return cid
+        # If we still failed, continue with generic logic (it may still recover via FQN paths)
+
+    # 1) FQN hint (from mapping table)
+    if fqn_hint:
+        cid = _try_exact_lookup_customer_id_by_fqn(_norm_name(fqn_hint))
+        if cid:
+            return cid
+
+    parent_ref = (payload.get("ParentRef") or {}).get("value")
+
+    # 2) Child: reconstruct FQN = "<parent_fqn>:<DisplayName>"
+    if parent_ref and display_name:
+        q = f"SELECT FullyQualifiedName FROM Customer WHERE Id = '{parent_ref}'"
         r, ok, _ = qbo_query(query_url, q, access_token)
+        if ok:
+            items = r.json().get("QueryResponse", {}).get("Customer", [])
+            if items:
+                parent_fqn = items[0].get("FullyQualifiedName")
+                if parent_fqn:
+                    candidate_fqn = f"{parent_fqn}:{display_name}"
+                    cid = _try_exact_lookup_customer_id_by_fqn(candidate_fqn)
+                    if cid:
+                        return cid
+
+    # 3) Top-level: FQN equals DisplayName
+    if not parent_ref and display_name:
+        cid = _try_exact_lookup_customer_id_by_fqn(display_name)
+        if cid:
+            return cid
+
+    # 4) Exact DisplayName (includes inactive)
+    name = _best_name_from_payload(payload)
+    if name:
+        cid = _try_exact_lookup_customer_id(name)
+        if cid:
+            return cid
+
+    # 5) Paged scan; prefer FQN match (if we have a hint), else DisplayName
+    start_pos, page_size = 1, 1000
+    target_fqn = _norm_name(fqn_hint or "")
+    target_name = _norm_name(name or "")
+    while True:
+        q = f"""
+            SELECT Id, FullyQualifiedName, DisplayName
+            FROM Customer
+            ORDERBY FullyQualifiedName
+            STARTPOSITION {start_pos}
+            MAXRESULTS {page_size}
+        """
+        r, ok, _ = qbo_query(query_url, _normalize_query(q), access_token)
         if not ok:
             return None
         items = r.json().get("QueryResponse", {}).get("Customer", [])
         if not items:
             return None
         for it in items:
-            if _norm_name(it.get("DisplayName")) == target:
+            fqn_val = _norm_name(it.get("FullyQualifiedName"))
+            dn_val  = _norm_name(it.get("DisplayName"))
+            if target_fqn and fqn_val == target_fqn:
+                return it.get("Id")
+            if not target_fqn and target_name and dn_val == target_name:
                 return it.get("Id")
         start_pos += page_size
 

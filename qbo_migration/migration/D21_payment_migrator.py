@@ -284,10 +284,10 @@ def build_payload(row, lines):
     # Header values
     currency_val = row.get(PAYMENT_HEADER_MAPPING.get("CurrencyRef.value"), "USD") or "USD"
     total_amt    = safe_float(row.get(PAYMENT_HEADER_MAPPING.get("TotalAmt")))
-
     txn_date     = row.get(PAYMENT_HEADER_MAPPING.get("TxnDate"))
+    # TxnSource = row.get(PAYMENT_HEADER_MAPPING.get("TxnSource"))
 
-    # Fast zero-check for lines
+    # Fast zero-check for lines (unchanged)
     amount_col = PAYMENT_LINE_MAPPING.get("Amount")
     if lines is None or lines.empty or amount_col not in lines.columns:
         all_line_amounts_zero = True
@@ -295,9 +295,21 @@ def build_payload(row, lines):
         amt_series = pd.to_numeric(lines[amount_col], errors="coerce").fillna(0.0)
         all_line_amounts_zero = (amt_series == 0).all()
 
-    # Skip the entire payload if both TotalAmt and all line amounts are 0
+    # Skip if both TotalAmt and all line amounts are 0 (unchanged)
     if total_amt == 0 and all_line_amounts_zero:
         issues.append("TotalAmt and all Line amounts are zero")
+    
+    # Compute line sum safely
+    line_sum = 0.0
+    if lines is not None and not lines.empty:
+        amt_col = PAYMENT_LINE_MAPPING.get("Amount")
+        if amt_col in lines.columns:
+            line_sum = pd.to_numeric(lines[amt_col], errors="coerce").fillna(0.0).sum()
+
+    # If TotalAmt is 0 but lines > 0, set TotalAmt to the sum of line amounts
+    if (safe_float(total_amt) == 0.0) and (line_sum > 0.0):
+        logger.warning(f"🔧 Payment {row['Source_Id']}: TotalAmt is 0; overriding to sum(Line)= {line_sum:.2f}")
+        total_amt = float(line_sum)
 
     if issues:
         logger.warning(f"⛔ Payment {row['Source_Id']} skipped due to: {', '.join(issues)}")
@@ -308,12 +320,31 @@ def build_payload(row, lines):
         "CustomerRef": {"value": str(row["Mapped_Customer"])},
         "TotalAmt": total_amt,
         "TxnDate": txn_date,
-        # "ProcessPayment": True,
         "CurrencyRef": {"value": currency_val},
         "Line": []
     }
 
-    # Keep DepartmentRef logic as in original (variable may be defined by caller)
+    # ─────────────────────────────────────────────────────────────
+    # if pd.notna(TxnSource):
+    #     payload["TxnSource"] = TxnSource
+
+    # ADD: PaymentMethodRef (header level) if present
+    pm_val = row.get(PAYMENT_HEADER_MAPPING.get("PaymentMethodRef.value"))
+    if pd.notna(pm_val) and str(pm_val).strip():
+        payload["PaymentMethodRef"] = {"value": str(pm_val).strip()}
+
+    # ADD: ProcessPayment (header level) if present/true
+    #     We only include if the value is truthy to avoid unintended charges.
+    proc_raw = row.get(PAYMENT_HEADER_MAPPING.get("ProcessPayment"))
+    if isinstance(proc_raw, str):
+        proc_flag = proc_raw.strip().lower() in {"true", "1", "yes", "y"}
+    else:
+        proc_flag = bool(proc_raw)
+    if proc_flag:
+        payload["ProcessPayment"] = True
+    # ─────────────────────────────────────────────────────────────
+
+    # Keep DepartmentRef logic (unchanged)
     _DepartmentRef_val = globals().get("DepartmentRef", None)
     if _DepartmentRef_val is not None:
         payload["DepartmentRef"] = {"value": _DepartmentRef_val}
@@ -321,7 +352,7 @@ def build_payload(row, lines):
     if pd.notna(row.get("Mapped_Account")):
         payload["DepositToAccountRef"] = {"value": str(row["Mapped_Account"])}
 
-    # Deduped PaymentRefNum (preserve behavior)
+    # Deduped PaymentRefNum (unchanged)
     dedup = row.get("Duplicate_PaymentRefNum")
     original = row.get("PaymentRefNum")
     payment_ref = (str(dedup).strip() if (pd.notna(dedup) and str(dedup).strip() != "") else str(original or "").strip())
@@ -330,6 +361,38 @@ def build_payload(row, lines):
 
     if pd.notna(row.get("PrivateNote")):
         payload["PrivateNote"] = str(row["PrivateNote"])
+
+    # ─────────────────────────────────────────────────────────────
+    # ADD: Minimal CreditCardPayment -> CreditChargeInfo (writeable only)
+    #      Only include if ProcessPayment is True AND we have a positive Amount.
+    #      NameOnAcct is optional but included if present; do NOT include any
+    #      CreditChargeResponse.* fields (they are read-only).
+    # ─────────────────────────────────────────────────────────────
+    # ADD / UPDATE: Minimal CreditCardPayment -> CreditChargeInfo (writeable only)
+    #      Only include if ProcessPayment is True AND we have a positive Amount.
+    #      NameOnAcct is optional but included if present; do NOT include any
+    #      CreditChargeResponse.* fields (they are read-only).
+    if proc_flag:
+        cc_amount = safe_float(row.get(PAYMENT_HEADER_MAPPING.get("CreditCardPayment.CreditChargeInfo.Amount")))
+        if cc_amount and cc_amount > 0:
+            cc_name = row.get(PAYMENT_HEADER_MAPPING.get("CreditCardPayment.CreditChargeInfo.NameOnAcct"))
+            cc_info = {"Amount": cc_amount}
+
+            if pd.notna(cc_name) and str(cc_name).strip():
+                cc_info["NameOnAcct"] = str(cc_name).strip()
+
+            # ✅ NEW: include ProcessPayment inside CreditChargeInfo if true
+            # cc_proc_flag = row.get(PAYMENT_HEADER_MAPPING.get("CreditCardPayment.CreditChargeInfo.ProcessPayment"))
+            # if isinstance(cc_proc_flag, str):
+            #     cc_proc_flag = cc_proc_flag.strip().lower() in {"true", "1", "yes", "y"}
+            # if cc_proc_flag:
+            #     cc_info["ProcessPayment"] = True
+
+            # attach only CreditChargeInfo — nothing from CreditChargeResponse
+            payload["CreditCardPayment"] = {"CreditChargeInfo": cc_info}
+    # ─────────────────────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────────────────────
 
     # Mapping: TxnType -> map table (unchanged)
     type_to_map_table = {
@@ -348,7 +411,7 @@ def build_payload(row, lines):
         "CreditCardCredit": "CreditCardCredit"
     }
 
-    # Load all mapping tables once per process (dictionary lookups are O(1))
+    # Load mapping tables once (unchanged)
     if _PAYMENT_LINK_MAPS is None:
         _PAYMENT_LINK_MAPS = {}
         needed = set(type_to_map_table.values())
@@ -362,7 +425,7 @@ def build_payload(row, lines):
             except Exception:
                 _PAYMENT_LINK_MAPS[tname] = {}
 
-    # Fast column index access
+    # Build lines (unchanged)
     if lines is not None and not lines.empty:
         colpos = {c: i for i, c in enumerate(lines.columns)}
         arr = lines.to_numpy()
@@ -1092,76 +1155,88 @@ def smart_payment_migration(PAYMENT_DATE_FROM, PAYMENT_DATE_TO):
     - After either path, reprocess failed records with null Target_Id one more time.
     """
     logger.info("🔎 Running smart_payment_migration...")
-    full_process = False
+    # --- Fast existence and count checks ---
+    map_exists = sql.table_exists("Map_Payment", MAPPING_SCHEMA)
+    source_count = sql.fetch_single_value(f"SELECT COUNT(*) FROM [{SOURCE_SCHEMA}].[Payment]", ()) or 0
+    mapped_count = sql.fetch_single_value(f"SELECT COUNT(*) FROM [{MAPPING_SCHEMA}].[Map_Payment]", ()) if map_exists else 0
 
-    if sql.table_exists("Map_Payment", MAPPING_SCHEMA):
-        mapped_df = sql.fetch_table("Map_Payment", MAPPING_SCHEMA)
-        source_df = sql.fetch_table("Payment", SOURCE_SCHEMA)
+    # --- If mapping table exists and counts match, skip remapping ---
+    if map_exists and source_count == mapped_count:
+        logger.info("✅ Table exists and row count matches. Resuming/posting Payments.")
+        resume_or_post_payments(PAYMENT_DATE_FROM, PAYMENT_DATE_TO)
 
-        if len(mapped_df) == len(source_df):
-            logger.info("✅ Table exists and row count matches. Resuming/posting Payments.")
-            resume_or_post_payments(PAYMENT_DATE_FROM, PAYMENT_DATE_TO)
+        # Retry failed ones after resume (only fetch failed rows, not whole table)
+        failed_rows = sql.fetch_table_with_params(
+            f"SELECT * FROM [{MAPPING_SCHEMA}].[Map_Payment] WHERE Porter_Status = 'Failed' AND Target_Id IS NULL", tuple()
+        )
+        if not failed_rows.empty:
+            logger.info(f"🔁 Reprocessing {len(failed_rows)} failed Payments with null Target_Id after main migration...")
+            for _, row in failed_rows.iterrows():
+                post_payment(row)
+        logger.info("🏁 SMART Payment migration complete.")
+        return
 
-            # Retry failed ones after resume
-            failed_df = sql.fetch_table("Map_Payment", MAPPING_SCHEMA)
-            failed_records = failed_df[(failed_df["Porter_Status"] == "Failed") & (failed_df["Target_Id"].isnull())]
-            if not failed_records.empty:
-                logger.info(f"🔁 Reprocessing {len(failed_records)} failed Payments with null Target_Id after main migration...")
-                for _, row in failed_records.iterrows():
-                    post_payment(row)
-            return
-        else:
-            logger.warning(f"❌ Row count mismatch: Map_Payment={len(mapped_df)}, Payment={len(source_df)}. Running full migration.")
-            full_process = True
-    else:
-        logger.warning("❌ Map_Payment table does not exist. Running full migration.")
-        full_process = True
+    # --- Otherwise, full migration path ---
+    logger.warning(f"❌ Map_Payment table missing or row count mismatch: Source={source_count}, Map={mapped_count}. Running full migration.")
+    ensure_mapping_table(PAYMENT_DATE_FROM, PAYMENT_DATE_TO)
 
-    # ----- Full migration path -----
-    if full_process:
-        ensure_mapping_table(PAYMENT_DATE_FROM, PAYMENT_DATE_TO)
+    if 'ENABLE_GLOBAL_PAYMENT_DOCNUMBER_DEDUP' in globals() and ENABLE_GLOBAL_PAYMENT_DOCNUMBER_DEDUP:
+        logger.info("🌐 Applying global PaymentRefNum deduplication strategy...")
+        apply_duplicate_docnumber_strategy()
+        try:
+            sql.clear_cache()
+        except Exception:
+            pass
 
-        if 'ENABLE_GLOBAL_PAYMENT_DOCNUMBER_DEDUP' in globals() and ENABLE_GLOBAL_PAYMENT_DOCNUMBER_DEDUP:
-            apply_duplicate_docnumber_strategy()
-            try:
-                sql.clear_cache()
-            except Exception:
-                pass
-            import time; time.sleep(1)
+    generate_payment_payloads_in_batches()
 
-        generate_payment_payloads_in_batches()
+    # Only fetch ready rows for posting
+    post_rows = sql.fetch_table_with_params(
+        f"SELECT * FROM [{MAPPING_SCHEMA}].[Map_Payment] WHERE Porter_Status = 'Ready' AND Payload_JSON IS NOT NULL AND Payload_JSON <> ''", tuple()
+    )
+    if post_rows.empty:
+        logger.warning("⚠️ No Payments with built JSON to post.")
+        logger.info("🏁 SMART Payment migration complete.")
+        return
 
-        post_query = f"SELECT * FROM {MAPPING_SCHEMA}.Map_Payment WHERE Porter_Status = 'Ready'"
-        post_rows = sql.fetch_table_with_params(post_query, tuple())
-        if post_rows.empty:
-            logger.warning("⚠️ No Payments with built JSON to post.")
-            return
+    url, headers = get_qbo_auth()
+    select_batch_size = 300
+    post_batch_limit  = 5
+    timeout           = 40
 
+    total = len(post_rows)
+    logger.info(f"📤 Posting {total} Payment record(s) via QBO Batch API (limit {post_batch_limit}/call)...")
+
+    for i in range(0, total, select_batch_size):
+        slice_df = post_rows.iloc[i:i + select_batch_size]
+        successes, failures, hdr_only = _post_batch_payments(
+            slice_df, url, headers, timeout=timeout, post_batch_limit=post_batch_limit, max_manual_retries=1
+        )
+        _apply_batch_updates_payment(successes, failures, header_only_successes=hdr_only)
+
+        done = min(i + select_batch_size, total)
+        logger.info(f"⏱️ {done}/{total} processed ({done * 100 // total}%)")
+
+    # Retry failed ones after full migration (batch optimized)
+    failed_rows = sql.fetch_table_with_params(
+        f"SELECT * FROM [{MAPPING_SCHEMA}].[Map_Payment] WHERE Porter_Status = 'Failed' AND Target_Id IS NULL AND Payload_JSON IS NOT NULL AND Payload_JSON <> ''", tuple()
+    )
+    if not failed_rows.empty:
+        logger.info(f"🔁 Reprocessing {len(failed_rows)} failed Payments with null Target_Id after main migration (batch mode)...")
+        # Use batch API for failed payments
         url, headers = get_qbo_auth()
         select_batch_size = 300
         post_batch_limit  = 5
         timeout           = 40
-
-        total = len(post_rows)
-        logger.info(f"📤 Posting {total} Payment record(s) via QBO Batch API (limit {post_batch_limit}/call)...")
-
-        for i in range(0, total, select_batch_size):
-            slice_df = post_rows.iloc[i:i + select_batch_size]
+        total_failed = len(failed_rows)
+        for i in range(0, total_failed, select_batch_size):
+            batch = failed_rows.iloc[i:i + select_batch_size]
             successes, failures, hdr_only = _post_batch_payments(
-                slice_df, url, headers, timeout=timeout, post_batch_limit=post_batch_limit, max_manual_retries=1
+                batch, url, headers, timeout=timeout, post_batch_limit=post_batch_limit, max_manual_retries=1
             )
             _apply_batch_updates_payment(successes, failures, header_only_successes=hdr_only)
+            done = min(i + select_batch_size, total_failed)
+            logger.info(f"⏱️ Failed retry {done}/{total_failed} processed ({done * 100 // total_failed}%)")
 
-            done = min(i + select_batch_size, total)
-            logger.info(f"⏱️ {done}/{total} processed ({done * 100 // total}%)")
-
-        # Retry failed ones after full migration
-        failed_df = sql.fetch_table("Map_Payment", MAPPING_SCHEMA)
-        failed_records = failed_df[(failed_df["Porter_Status"] == "Failed") & (failed_df["Target_Id"].isnull())]
-        if not failed_records.empty:
-            logger.info(f"🔁 Reprocessing {len(failed_records)} failed Payments with null Target_Id after main migration...")
-            for _, row in failed_records.iterrows():
-                post_payment(row)
-
-        logger.info("🏁 SMART Payment migration complete.")
+    logger.info("🏁 SMART Payment migration complete.")
 

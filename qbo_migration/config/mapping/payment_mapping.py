@@ -5,6 +5,7 @@ PAYMENT_HEADER_MAPPING = {
     "CustomerRef.name": "CustomerRef.name",
     "DepositToAccountRef.value": "DepositToAccountRef.value",
     "PaymentRefNum": "PaymentRefNum",
+    # "TxnSource":"TxnSource",
     "TotalAmt": "TotalAmt",
     "UnappliedAmt": "UnappliedAmt",
     "ProcessPayment": "ProcessPayment",
@@ -15,7 +16,11 @@ PAYMENT_HEADER_MAPPING = {
     "CurrencyRef.name": "CurrencyRef.name",
     "ExchangeRate": "ExchangeRate",
     "MetaData.CreateTime": "MetaData.CreateTime",
-    "MetaData.LastUpdatedTime": "MetaData.LastUpdatedTime"
+    "MetaData.LastUpdatedTime": "MetaData.LastUpdatedTime",
+
+    "CreditCardPayment.CreditChargeInfo.Amount":"CreditCardPayment.CreditChargeInfo.Amount",
+    "CreditCardPayment.CreditChargeInfo.NameOnAcct":"CreditCardPayment.CreditChargeInfo.NameOnAcct",
+    "CreditCardPayment.CreditChargeInfo.ProcessPayment":"CreditCardPayment.CreditChargeInfo.ProcessPayment"
 }
 
 # config/mapping/payment_mapping.py

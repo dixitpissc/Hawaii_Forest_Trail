@@ -65,7 +65,7 @@ QBO_ENTITIES = [
     # "Bill",
     # "CreditMemo",
     # "Payment",
-    "JournalEntry",
+    # "JournalEntry",
     # "Purchase",
     # "SalesReceipt",
     # "VendorCredit",

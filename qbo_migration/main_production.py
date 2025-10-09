@@ -221,7 +221,7 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "invoice", 
         # "creditmemo", 
         # "salesreceipt", 
-        "journalentry",
+        # "journalentry",
         
         # "payment",
         # "deposit", 
