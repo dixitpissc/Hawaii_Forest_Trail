@@ -210,18 +210,22 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "vendor", 
         # "customer", 
         # "employee",
+        
         # # transactional
+        
         # "estimate",  # Fixed: lowercase to match registry key
-        # "invoice", 
-        "creditmemo", 
         # "bill", 
-        # "vendorcredit", 
-        # "journalentry",
-        # "deposit", 
         # "purchase", 
+        # "vendorcredit", 
+
+        # "invoice", 
+        # "creditmemo", 
         # "salesreceipt", 
-        # "refundreceipt", 
+        "journalentry",
+        
         # "payment",
+        # "deposit", 
+        # "refundreceipt", 
         # "billpayment", 
         # "transfer"
     ]

@@ -19,6 +19,8 @@ from utils.mapping_updater import update_mapping_status
 from storage.sqlserver import sql
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 import os, json, requests, pandas as pd
+from utils.payload_cleaner import deep_clean
+
 try:
     import orjson
     def dumps_fast(obj):
@@ -464,7 +466,7 @@ def build_payload(row, lines):
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
 
-    return payload
+    return deep_clean(payload)
 
 def generate_payloads(batch_size=500):
     """

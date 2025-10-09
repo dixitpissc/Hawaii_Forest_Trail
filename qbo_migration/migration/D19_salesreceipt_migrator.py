@@ -2,7 +2,7 @@
 Sequence : 19
 Module: SalesReceipt_migrator.py
 Author: Dixit Prajapati
-Created: 2025-07-29
+Created: 2025-10-09
 Description: Handles migration of SalesReceipt records from QBO to QBO.
 Production : Working
 Development : Require when necessary
@@ -366,6 +366,10 @@ def build_payload(row, lines):
         build_payload._class_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple()).set_index("Source_Id")["Target_Id"].to_dict()
     item_dict = build_payload._item_dict
     class_dict = build_payload._class_dict
+    # Ensure account_dict is available for line mapping
+    if not hasattr(build_payload, "_account_dict"):
+        build_payload._account_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple()).set_index("Source_Id")["Target_Id"].to_dict()
+    account_dict = build_payload._account_dict
 
     # Use index-based lookups for performance
     row_get = row.get if hasattr(row, "get") else lambda k: row[k] if k in row else None
@@ -375,6 +379,7 @@ def build_payload(row, lines):
         "TxnDate": row_get("TxnDate"),
         "CustomerRef": {"value": str(row_get("Mapped_Customer"))} if row_get("Mapped_Customer") else None,
         "CurrencyRef": {"value": row_get("CurrencyRef.value") or "USD"},
+        "PrivateNote" : row_get("PrivateNote"),
         "PrintStatus": row_get("PrintStatus"),
         "EmailStatus": row_get("EmailStatus"),
         "PaymentRefNum": row_get("PaymentRefNum"),
@@ -382,6 +387,7 @@ def build_payload(row, lines):
         "PaymentMethodRef": {"value": str(row_get("Mapped_PaymentMethod"))} if row_get("Mapped_PaymentMethod") else None,
         "CustomerMemo": {"value": row_get("CustomerMemo.value")} if row_get("CustomerMemo.value") else None,
         "Balance": safe_float(row_get("Balance")),
+        "ApplyTaxAfterDiscount" : row_get("ApplyTaxAfterDiscount"),
         "Line": []
     }
     if row_get("Mapped_Project"):
@@ -404,18 +410,27 @@ def build_payload(row, lines):
             if not item:
                 item_src = ln_get("SalesItemLineDetail.ItemRef.value")
                 item = item_dict.get(item_src)
+            
+            # Map ItemAccountRef
+            account_ref_src = ln_get("SalesItemLineDetail.ItemAccountRef.value")
+            account_val = None
+            if account_ref_src:
+                account_val = account_dict.get(account_ref_src)
+            line_detail = {
+                "ItemRef": {"value": str(item)} if item else None,
+                "Qty": safe_float(ln_get("SalesItemLineDetail.Qty")),
+                "UnitPrice": safe_float(ln_get("SalesItemLineDetail.UnitPrice")),
+                "ServiceDate": ln_get("SalesItemLineDetail.ServiceDate"),
+                "TaxCodeRef": {"value": ln_get("SalesItemLineDetail.TaxCodeRef.value") or "NON"}
+            }
+            if account_val is not None:
+                line_detail["ItemAccountRef"] = {"value": str(account_val)}
             line = {
                 "LineNum": int(float(ln_get("LineNum") or 1)),
                 "Amount": safe_float(ln_get("Amount")),
                 "Description": ln_get("Description"),
                 "DetailType": "SalesItemLineDetail",
-                "SalesItemLineDetail": {
-                    "ItemRef": {"value": str(item)} if item else None,
-                    "Qty": safe_float(ln_get("SalesItemLineDetail.Qty")),
-                    "UnitPrice": safe_float(ln_get("SalesItemLineDetail.UnitPrice")),
-                    "ServiceDate": ln_get("SalesItemLineDetail.ServiceDate"),
-                    "TaxCodeRef": {"value": ln_get("SalesItemLineDetail.TaxCodeRef.value") or "NON"}
-                }
+                "SalesItemLineDetail": line_detail
             }
             class_val = ln_get("Mapped_Class")
             if not class_val:
@@ -427,6 +442,7 @@ def build_payload(row, lines):
             line["SalesItemLineDetail"] = {k: v for k, v in line["SalesItemLineDetail"].items() if v is not None}
             payload["Line"].append(line)
             has_valid_line = True
+        
         elif detail_type == "AccountBasedExpenseLineDetail":
             detail = {
                 "AccountRef": {"value": str(ln_get("Mapped_Account"))} if ln_get("Mapped_Account") else None,
