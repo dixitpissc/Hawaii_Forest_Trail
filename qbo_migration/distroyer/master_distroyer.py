@@ -61,9 +61,6 @@ HEADERS = {
 # Add the entities you want to delete
 QBO_ENTITIES = [
     # Transaction Entities
-    # "Invoice",
-    # "Bill",
-    # "CreditMemo",
     # "Payment",
     # "JournalEntry",
     # "Purchase",
@@ -75,6 +72,9 @@ QBO_ENTITIES = [
     # "Deposit",
     # "Estimate",
     # "PurchaseOrder",
+    # "Invoice",
+    # "Bill",
+    # "CreditMemo",
     # # "StatementCharge",  # rarely used
     # "BillPayment",
     # "VendorCredit",
@@ -154,7 +154,7 @@ def delete_all_for_entity(entity: str, batch_size: int = 500):
         logger.info(f"🧹 Deleting {len(records)} {entity} records (batch starting at {start_pos})")
         timer = ProgressTimer(len(records))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(delete_entity_record, entity, rid, token) for rid, token in records]
             for fut in concurrent.futures.as_completed(futures):
                 if fut.result():

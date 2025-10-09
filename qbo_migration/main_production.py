@@ -223,7 +223,7 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "salesreceipt", 
         # "journalentry",
         
-        # "payment",
+        "payment",
         # "deposit", 
         # "refundreceipt", 
         # "billpayment", 
