@@ -1,4 +1,4 @@
-from migration.D17_deposit_migrator import resume_or_post_deposits
+from migration.D17_deposit_migrator import smart_deposit_migration
 from storage.sqlserver import sql
 import os
 from utils.log_timer import global_logger as logger
@@ -39,7 +39,7 @@ def initiating_deposit_migration():
 
         if count_header > 0 and count_lines > 0:
             logger.info(f"✅ Found {count_header} Deposit and {count_lines} Deposit_Line records. Starting migration...")
-            resume_or_post_deposits(DEPOSIT_DATE_FROM,DEPOSIT_DATE_TO)
+            smart_deposit_migration(DEPOSIT_DATE_FROM,DEPOSIT_DATE_TO)
             logger.info("🎯 Deposit migration completed.")
         else:
             logger.info("⏩ Skipping Deposit migration due to no data in one or both tables.")

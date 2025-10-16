@@ -17,6 +17,7 @@ from config.mapping.billpayment_mapping import BILLPAYMENT_HEADER_MAPPING as HEA
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
 
 load_dotenv()
 auto_refresh_token_if_needed()
@@ -140,6 +141,7 @@ def ensure_mapping_table(BILLPAYMENT_DATE_FROM,BILLPAYMENT_DATE_TO):
         "Check":            "Map_Purchase",
         "Expense":          "Map_Purchase",
         "CreditCardCredit": "Map_Purchase",
+        "Deposit":          "Map_Deposit",
     }
     # Override of TxnType when writing payload
     txn_type_override = {
@@ -400,7 +402,7 @@ def build_payload(row, lines):
             logger.warning(f"⏭️ Skipping BillPayment {row['Source_Id']} — no LinkedTxn and amount is zero")
         return None
 
-    return payload
+    return deep_clean(payload)
 
 def generate_billpayment_payloads_in_batches(batch_size=1000):
     """

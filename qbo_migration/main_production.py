@@ -223,11 +223,12 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "salesreceipt", 
         # "journalentry",
         
-        "payment",
+        # "payment",
+        # "transfer"
         # "deposit", 
         # "refundreceipt", 
-        # "billpayment", 
-        # "transfer"
+        "billpayment", 
+        
     ]
 
     seq = [s.strip().lower() for s in (entities or default_sequence)]

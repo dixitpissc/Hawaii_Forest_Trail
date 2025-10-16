@@ -69,7 +69,7 @@ QBO_ENTITIES = [
     # "RefundReceipt",
     # "TimeActivity",
     # "Transfer",
-    # "Deposit",
+    "Deposit",
     # "Estimate",
     # "PurchaseOrder",
     # "Invoice",

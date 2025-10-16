@@ -20,9 +20,10 @@ from utils.mapping_updater import update_mapping_status
 from config.mapping.deposit_mapping import DEPOSIT_HEADER_MAPPING as HEADER_MAP, DEPOSIT_LINE_MAPPING as LINE_MAP
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
+from utils.payload_cleaner import deep_clean
 # from storage.sqlserver.sql import executemany
 
-load_dotenv()
+load_dotenv() 
 auto_refresh_token_if_needed()
 
 SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "dbo")
@@ -317,12 +318,32 @@ def _ensure_maps_loaded():
     if _MAPS is not None:
         return
 
-    def _to_dict(table):
-        t = sql.fetch_table_with_params(
-            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{table}]",
-            tuple()
-        )
-        return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
+    # def _to_dict(table):
+    #     t = sql.fetch_table_with_params(
+    #         f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{table}]",
+    #         tuple()
+    #     )
+    #     return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
+
+    def _to_dict(table: str) -> dict:
+        """
+        Load Source_Id→Target_Id from a Map_* table.
+        If the table doesn't exist (e.g., Map_Transfer), return {} and continue.
+        """
+        try:
+            t = sql.fetch_table_with_params(
+                f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{table}]",
+                tuple()
+            )
+            return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
+        except Exception as e:
+            # Most common: 42S02 / Invalid object name '<schema>.<table>'
+            try:
+                code = e.args[0] if isinstance(e.args, (list, tuple)) and e.args else None
+            except Exception:
+                code = None
+            logger.debug(f"⏭️  Skipping missing or unreadable table {MAPPING_SCHEMA}.{table} (code={code}): {e}")
+            return {}
 
     _MAPS = {
         "Account":       _to_dict("Map_Account"),
@@ -332,6 +353,12 @@ def _ensure_maps_loaded():
         "Customer":      _to_dict("Map_Customer"),
         "Vendor":        _to_dict("Map_Vendor"),
         "Employee":      _to_dict("Map_Employee"),
+
+                # 🔽 NEW: LinkedTxn targets
+        "Payment":       _to_dict("Map_Payment"),
+        "SalesReceipt":  _to_dict("Map_SalesReceipt"),
+        "JournalEntry":  _to_dict("Map_JournalEntry"),
+        "Transfer":      _to_dict("Map_Transfer"),
     }
 
 # ---------- OPT: call these around your batch loop ----------
@@ -444,6 +471,12 @@ def build_payload(row, lines):
     c_EntityVal  = _idx("DepositLineDetail.Entity.value")
     c_EntityType = _idx("DepositLineDetail.Entity.type")
 
+        # 🔽 NEW: LinkedTxn + Project
+    c_LTxnId     = _idx("LinkedTxn[0].TxnId")
+    c_LTxnType   = _idx("LinkedTxn[0].TxnType")
+    c_LTxnLineId = _idx("LinkedTxn[0].TxnLineId")
+    c_ProjectRef = _idx("ProjectRef.value")  # optional
+
     for row_vals in lines.itertuples(index=False, name=None):
         line_num_val = row_vals[c_LineNum]
         amt_val      = row_vals[c_Amount]
@@ -454,8 +487,13 @@ def build_payload(row, lines):
             "Amount": safe_float(amt_val),
             "Description": desc_val
         }
+
         if pd.notna(line_num_val):
-            line["LineNum"] = int(line_num_val)
+            try:
+                # Handle float values like '1.0' or '2.0' safely
+                line["LineNum"] = int(float(line_num_val))
+            except Exception:
+                logger.warning(f"Invalid LineNum value: {line_num_val} (Deposit Source_Id={row.get('Source_Id')})")
 
         detail = {}
 
@@ -529,12 +567,85 @@ def build_payload(row, lines):
         if detail:
             line["DepositLineDetail"] = detail
 
+        # 🔗 NEW: LinkedTxn mapping (line-level)
+        if (c_LTxnId is not None) and (c_LTxnType is not None):
+            src_txn_id   = row_vals[c_LTxnId]
+            src_txn_type = row_vals[c_LTxnType]
+
+            if pd.notna(src_txn_id) and pd.notna(src_txn_type):
+                # Normalize the type to QBO's expected tokens
+                # Your inputs seen: Payment, Transfer, SalesReceipt, JournalEntry, [NULL]
+                t = str(src_txn_type).strip()
+
+                # Map source TxnId → Target_Id using proper Map_* dict
+                target_id = None
+                if t.lower() == "payment":
+                    target_id = maps["Payment"].get(src_txn_id)
+                elif t.lower() == "salesreceipt":
+                    target_id = maps["SalesReceipt"].get(src_txn_id)
+                elif t.lower() == "journalentry":
+                    target_id = maps["JournalEntry"].get(src_txn_id)
+                elif t.lower() == "transfer":
+                    target_id = maps["Transfer"].get(src_txn_id)
+                else:
+                    # Unknown or unsupported type — leave unlinked
+                    logger.debug(f"Deposit line LinkedTxn ignored (unsupported type): {t} for Source_Id={row['Source_Id']}")
+
+                if target_id:
+                    linked = {
+                        "TxnId":   str(target_id),
+                        "TxnType": t  # keep original token (QBO expects these exact types)
+                    }
+                    if c_LTxnLineId is not None:
+                        ltid = row_vals[c_LTxnLineId]
+                        if pd.notna(ltid):
+                            # Most link types don't need TxnLineId; include only if you truly have it
+                            linked["TxnLineId"] = str(ltid)
+
+                    # QBO accepts an array; add a single link (extend if you later support [1], [2]…)
+                    line["LinkedTxn"] = [linked]
+                else:
+                    # Mapping missing — safe to continue without link (or log for audit)
+                    logger.warning(
+                        f"Deposit line LinkedTxn mapping missing for type={t}, src_id={src_txn_id} (Parent Source_Id={row['Source_Id']})"
+                    )
+
+        # 🔷 OPTIONAL: ProjectRef on the line (if you have a Project dimension active)
+        # if c_ProjectRef is not None:
+        #     proj_val = row_vals[c_ProjectRef]
+        #     if pd.notna(proj_val):
+        #         # If you maintain a Map_Project, you can resolve to target here.
+        #         # Otherwise pass through the source id if it's already the QBO id.
+        #         # Example with no mapping:
+        #         try:
+        #             line["ProjectRef"] = {"value": str(int(proj_val))}
+        #         except Exception:
+        #             line["ProjectRef"] = {"value": str(proj_val)}
+
+
         payload["Line"].append(line)
 
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
 
-    return payload if payload["Line"] else None
+    return deep_clean(payload) if payload["Line"] else None
+
+def clean_lines_with_linkedtxn(payload):
+    """
+    For each line in payload['Line'], keep only those lines where 'LinkedTxn' exists with amount and linkedtxn. Else keep as it is with full detail at linelevel.
+    """
+    if not payload or "Line" not in payload:
+        return payload
+    cleaned_lines = []
+    import copy
+    for line in payload["Line"]:
+        if "LinkedTxn" in line:
+            cleaned_line = {k: line[k] for k in ("Amount", "LinkedTxn") if k in line}
+            cleaned_lines.append(cleaned_line)
+        else:
+            cleaned_lines.append(copy.deepcopy(line))  # keep all fields for lines without LinkedTxn
+    payload["Line"] = cleaned_lines
+    return payload
 
 def generate_deposit_payloads_in_batches(batch_size=500):
     logger.info("🔧 Generating JSON payloads for deposits...")
@@ -581,6 +692,7 @@ def generate_deposit_payloads_in_batches(batch_size=500):
                 continue
 
             lines = get_lines(sid)
+
             payload = build_payload(row, lines)
 
             if not payload:
@@ -590,7 +702,9 @@ def generate_deposit_payloads_in_batches(batch_size=500):
                 )
                 continue
 
-            # keep your existing pretty-print pattern (safe, but you can pass `payload` directly for speed)
+            # Clean lines with LinkedTxn before storing
+            payload = clean_lines_with_linkedtxn(payload)
+
             pretty_json = json.dumps(payload, indent=2)
             update_mapping_status(
                 MAPPING_SCHEMA, "Map_Deposit", sid, "Ready",
@@ -881,7 +995,7 @@ def smart_deposit_migration(DEPOSIT_DATE_FROM,DEPOSIT_DATE_TO):
         logger.warning("❌ Map_Deposit table does not exist. Running full migration.")
         full_process = True
     if full_process:
-        migrate_deposits()
+        migrate_deposits(DEPOSIT_DATE_FROM,DEPOSIT_DATE_TO)
         # After full migration, reprocess failed records with null Target_Id one more time
         failed_df = sql.fetch_table("Map_Deposit", MAPPING_SCHEMA)
         failed_records = failed_df[(failed_df["Porter_Status"] == "Failed") & (failed_df["Target_Id"].isnull())]

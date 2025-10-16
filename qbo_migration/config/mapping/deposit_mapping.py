@@ -48,6 +48,16 @@ DEPOSIT_LINE_MAPPING = {
     "DepositLineDetail.TaxCodeRef.value": "DepositLineDetail.TaxCodeRef.value",
     "DepositLineDetail.TaxAmount": "DepositLineDetail.TaxAmount",
 
+    # New: LinkedTxn support (linking this deposit line to a source txn/line)
+    # If your extractor provides multiple indices, add [1], [2], ... similarly.
+    "LinkedTxn[0].TxnId": "LinkedTxn[0].TxnId",
+    "LinkedTxn[0].TxnType": "LinkedTxn[0].TxnType",
+    "LinkedTxn[0].TxnLineId": "LinkedTxn[0].TxnLineId",
+
+    # New: Project reference (seen in your source)
+    # If your source also exposes a name, add "ProjectRef.name" here as needed.
+    "ProjectRef.value": "ProjectRef.value",
+
     # Control / Technical
     "Parent_Id": "Parent_Id",
     "Parent_Entity": "Parent_Entity",
