@@ -18,6 +18,7 @@ from utils.log_timer import global_logger as logger
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
 
 auto_refresh_token_if_needed()
 load_dotenv()
@@ -482,7 +483,7 @@ def build_payload(row, lines):
     add_txn_tax_detail_from_row(payload, row)
     
     # Remove null fields recursively
-    return remove_null_fields(payload)
+    return deep_clean(payload)
 
 def generate_payloads(batch_size=500):
     """

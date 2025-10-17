@@ -19,6 +19,8 @@ from utils.mapping_updater import update_mapping_status
 import time, random, orjson, requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from utils.payload_cleaner import deep_clean
+
 
 load_dotenv()
 auto_refresh_token_if_needed()
@@ -797,7 +799,7 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 if l.get("Amount") is not None
             ]
 
-        return payload
+        return deep_clean(payload)
 
 
     while True:

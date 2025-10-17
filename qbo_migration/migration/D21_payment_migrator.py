@@ -18,6 +18,8 @@ from config.mapping.payment_mapping import PAYMENT_HEADER_MAPPING, PAYMENT_LINE_
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
+
 
 ENABLE_GLOBAL_REFUNDRECEIPT_DOCNUMBER_DEDUP=True
 
@@ -463,7 +465,7 @@ def build_payload(row, lines):
                 }]
             })
 
-    return payload
+    return deep_clean(payload)
 
 def generate_payment_payloads_in_batches(batch_size=500):
     """

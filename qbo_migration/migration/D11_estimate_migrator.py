@@ -15,6 +15,7 @@ from storage.sqlserver.sql import insert_invoice_map_dataframe
 from utils.token_refresher import auto_refresh_token_if_needed,get_qbo_context_migration
 from utils.log_timer import global_logger as logger, ProgressTimer
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
+from utils.payload_cleaner import deep_clean
 
 # ──────────────────────────────────────────────────────────────
 # Boot / Config
@@ -411,7 +412,7 @@ def build_payload(row, lines):
         if _status_raw:
             logger.info(f"ℹ️ Suppressing unsupported TxnStatus '{_status_raw}' for Estimate {row.get('Source_Id')}")    
 
-    return payload
+    return deep_clean(payload)
 
 # ──────────────────────────────────────────────────────────────
 # Batch JSON generation

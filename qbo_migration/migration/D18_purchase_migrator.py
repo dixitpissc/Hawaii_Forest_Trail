@@ -19,6 +19,8 @@ from config.mapping.purchase_mapping import PURCHASE_HEADER_MAPPING as HEADER_MA
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
+
 
 load_dotenv()
 auto_refresh_token_if_needed()
@@ -707,7 +709,7 @@ def build_payload(row, lines):
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
 
-    return payload if payload["Line"] else None
+    return deep_clean(payload) if payload["Line"] else None
 
 def generate_purchase_payloads_in_batches(batch_size=500):
     """

@@ -22,6 +22,7 @@ from utils.token_refresher import get_qbo_context_migration
 from dotenv import load_dotenv
 from utils.mapping_updater import update_mapping_status
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
 
 # ---------------------------- ENV/INIT ----------------------------
 load_dotenv()
@@ -884,7 +885,7 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
 
-    return payload if payload["Line"] else None
+    return deep_clean(payload) if payload["Line"] else None
 
 # ---------------------------- PAYLOAD GENERATION (BATCHED) ----------------------------
 def generate_payloads_in_batches(batch_size=1000):

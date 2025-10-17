@@ -20,6 +20,7 @@ import requests
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
 from storage.sqlserver.sql import executemany
+from utils.payload_cleaner import deep_clean
 
 load_dotenv()
 auto_refresh_token_if_needed()
@@ -575,7 +576,7 @@ def build_refundreceipt_payload(row, lines):
     # NEW: Add tax detail if available
     add_txn_tax_detail_from_row(payload, row)
     
-    return remove_null_fields(payload)
+    return deep_clean(payload)
 
 def generate_refundreceipt_payloads(batch_size = 500):
     """

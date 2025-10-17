@@ -20,6 +20,7 @@ from utils.token_refresher import auto_refresh_token_if_needed, get_qbo_context_
 from utils.logger_builder import build_logger
 from utils.log_timer import ProgressTimer
 import json,re,math
+from utils.payload_cleaner import deep_clean
 
 # === Load environment and refresh token ===
 load_dotenv()
@@ -188,7 +189,7 @@ def build_term_payload(row: pd.Series) -> dict:
         if payload[k] == "" or payload[k] is None:
             payload.pop(k)
 
-    return payload
+    return deep_clean(payload)
 
 # ---------- QBO query ----------
 def get_existing_qbo_term_id(name):
