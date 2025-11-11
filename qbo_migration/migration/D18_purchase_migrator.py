@@ -547,26 +547,66 @@ def build_payload(row, lines):
         employee_map = {}
 
     # Header fields
-    raw_doc = row.get(HEADER_MAP.get("DocNumber"))
+    # raw_doc = row.get(HEADER_MAP.get("DocNumber"))
+    # dedup_doc = row.get("Duplicate_DocNumber")
+    # def _valid_docnumber(val):
+    #     if val is None:
+    #         return False
+    #     s = str(val).strip()
+    #     return s and s.lower() != "null"
+    # doc_number = None
+    # if _valid_docnumber(dedup_doc):
+    #     doc_number = str(dedup_doc).strip()
+    # elif _valid_docnumber(raw_doc):
+    #     doc_number = str(raw_doc).strip()
+    # payload = {
+    #     "CurrencyRef": {"value": row.get("CurrencyRef.value", "USD") or "USD"},
+    #     "PrivateNote" : row.get("PrivateNote"),
+    #     "Credit" : row.get("Credit"),
+    #     "TxnDate": row.get("TxnDate"),
+    #     "Line": []
+    # }
+    # if doc_number:
+    #     payload["DocNumber"] = doc_number
+
+    # Header fields
+    raw_doc = row.get(HEADER_MAP.get("DocNumber")) or row.get("DocNumber")
     dedup_doc = row.get("Duplicate_DocNumber")
-    def _valid_docnumber(val):
+
+    def _normalize_doc(val):
         if val is None:
-            return False
+            return None
         s = str(val).strip()
-        return s and s.lower() != "null"
-    doc_number = None
-    if _valid_docnumber(dedup_doc):
-        doc_number = str(dedup_doc).strip()
-    elif _valid_docnumber(raw_doc):
-        doc_number = str(raw_doc).strip()
+        if not s or s.lower() in ("null", "nan"):
+            return None
+        return s
+
+    dedup_doc_norm = _normalize_doc(dedup_doc)
+    raw_doc_norm = _normalize_doc(raw_doc)
+
+    if dedup_doc_norm is not None:
+        doc_number = dedup_doc_norm
+        logger.debug(
+            f"[DocNumber] Using Duplicate_DocNumber='{doc_number}' "
+            f"for Source_Id={row.get('Source_Id')}"
+        )
+    else:
+        doc_number = raw_doc_norm
+        logger.debug(
+            f"[DocNumber] Using original DocNumber='{doc_number}' "
+            f"for Source_Id={row.get('Source_Id')} (no valid duplicate)"
+        )
+
     payload = {
         "CurrencyRef": {"value": row.get("CurrencyRef.value", "USD") or "USD"},
         "PrivateNote" : row.get("PrivateNote"),
         "Credit" : row.get("Credit"),
+        "TxnDate": row.get("TxnDate"),
         "Line": []
     }
     if doc_number:
         payload["DocNumber"] = doc_number
+
     # Add header-level DepartmentRef if present and mapped
     dept_header_val = row.get("DepartmentRef_value")
     if pd.notna(dept_header_val):
@@ -917,7 +957,7 @@ def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_l
                     for (sid, payload) in chunk
                 ]
             }
-            return  session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
 
         attempted_refresh = False
         for attempt in range(max_manual_retries + 1):
