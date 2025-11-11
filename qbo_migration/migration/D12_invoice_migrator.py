@@ -22,7 +22,7 @@ from config.mapping.invoice_mapping import (
     DISCOUNT_LINE_MAPPING,
     SUBTOTAL_LINE_MAPPING
 )
-from utils.payload_cleaner import clean_payload
+from utils.payload_cleaner import deep_clean
 import re
 
 load_dotenv()
@@ -614,7 +614,7 @@ def build_payload(row, lines):
             item_id = item_dict.get(ln.get(SALES_ITEM_LINE_MAPPING["SalesItemLineDetail.ItemRef.value"]))
             if not item_id:
                 logger.warning(f"❗ Skipping line: unmapped item {ln.get(SALES_ITEM_LINE_MAPPING['SalesItemLineDetail.ItemRef.value'])}")
-                continue
+                # continue
             class_id = class_dict.get(ln.get(SALES_ITEM_LINE_MAPPING["SalesItemLineDetail.ClassRef.value"]))
             qty = safe_float(ln.get(SALES_ITEM_LINE_MAPPING["SalesItemLineDetail.Qty"]))
             # if not qty and pd.isna(ln.get(SALES_ITEM_LINE_MAPPING["SalesItemLineDetail.UnitPrice"])):
@@ -701,7 +701,7 @@ def build_payload(row, lines):
     # payload["LinkedTxn"] = []
 
 
-    return clean_payload(payload)
+    return deep_clean(payload)
 
 def generate_invoice_payloads_in_batches(batch_size=500):
     """
@@ -1008,7 +1008,7 @@ def migrate_invoices(INVOICE_DATE_FROM,INVOICE_DATE_TO):
         docnumber_column="DocNumber",
         source_id_column="Source_Id",
         duplicate_column="Duplicate_Docnumber",
-        check_against_tables=[]
+        check_against_tables=[ "Map_Estimate","Map_Bill","Map_Purchase","Map_VendorCredit"]
     )
 
     # 2. Generate payloads

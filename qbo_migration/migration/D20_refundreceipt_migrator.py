@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 from storage.sqlserver import sql
 from utils.token_refresher import auto_refresh_token_if_needed
 from utils.log_timer import global_logger as logger
-from utils.cleaner import remove_null_fields
 import requests
 from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from utils.token_refresher import get_qbo_context_migration
@@ -168,102 +167,6 @@ def get_qbo_auth():
         "Content-Type": "application/json"
     }
 
-# def ensure_mapping_table(REFUNDRECEIPT_DATE_FROM,REFUNDRECEIPT_DATE_TO):
-#     """
-#     Ensures the Map_RefundReceipt table is initialized and enriched with master mappings.
-#     - Loads source RefundReceipt data
-#     - Resolves mapped Customer, Account, and PaymentMethod
-#     - Creates or updates mapping table schema
-#     - Inserts enriched data into Map_RefundReceipt
-#     """
-#     logger.info("🔧 Preparing Map_RefundReceipt from RefundReceipt source (optimized)")
-
-#     DATE_FROM = REFUNDRECEIPT_DATE_FROM
-#     DATE_TO = REFUNDRECEIPT_DATE_TO
-
-#     # 1. Date filter
-#     query = f"""
-#         SELECT * FROM [{SOURCE_SCHEMA}].[RefundReceipt]
-#         WHERE 1=1
-#         {"AND TxnDate >= ?" if DATE_FROM else ""}
-#         {"AND TxnDate <= ?" if DATE_TO else ""}
-#     """
-#     params = tuple(p for p in [DATE_FROM, DATE_TO] if p)
-#     df = sql.fetch_table_with_params(query, params)
-#     if df.empty:
-#         logger.warning("⚠️ No records found in RefundReceipt source")
-#         return
-
-#     # 2. Core migration fields
-#     df["Source_Id"] = df["Id"]
-#     required_cols = [
-#         "Target_Id", "Porter_Status", "Retry_Count", "Failure_Reason", "Payload_JSON",
-#         "Mapped_Customer", "Mapped_Account", "Mapped_PaymentMethod",
-#         "Mapped_Line_ItemRef", "Mapped_Line_ClassRef"
-#     ]
-#     for col in required_cols:
-#         if col not in df.columns:
-#             df[col] = None
-#     df["Target_Id"] = None
-#     df["Porter_Status"] = "Ready"
-#     df["Retry_Count"] = 0
-#     df["Failure_Reason"] = None
-#     df["Payload_JSON"] = None
-
-#     # 3. Bulk load mapping tables into dicts
-#     def load_map(table):
-#         t = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{table}]", tuple())
-#         return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
-
-#     customer_dict = load_map("Map_Customer")
-#     account_dict = load_map("Map_Account")
-#     payment_dict = load_map("Map_PaymentMethod")
-#     item_dict = load_map("Map_Item")
-#     class_dict = load_map("Map_Class")
-
-#     # 4. Bulk fetch RefundReceipt_Line and group
-#     lines = sql.fetch_table_with_params(f"SELECT * FROM [{SOURCE_SCHEMA}].[RefundReceipt_Line]", tuple())
-#     lines_grouped = lines.groupby("Parent_Id") if not lines.empty else {}
-
-#     # 5. Vectorized header-level mappings
-#     if "CustomerRef.value" in df.columns:
-#         df["Mapped_Customer"] = df["CustomerRef.value"].map(lambda x: customer_dict.get(x) if pd.notna(x) else None)
-#     if "DepositToAccountRef.value" in df.columns:
-#         df["Mapped_Account"] = df["DepositToAccountRef.value"].map(lambda x: account_dict.get(x) if pd.notna(x) else None)
-#     if "PaymentMethodRef.value" in df.columns:
-#         df["Mapped_PaymentMethod"] = df["PaymentMethodRef.value"].map(lambda x: payment_dict.get(x) if pd.notna(x) else None)
-
-#     # 6. Vectorized line-level mappings (Item, Class)
-#     def get_refs(parent_id, col, mapping_dict):
-#         if col not in lines.columns:
-#             return None
-#         if parent_id not in lines_grouped.groups:
-#             return None
-#         vals = lines_grouped.get_group(parent_id)[col].dropna().unique()
-#         targets = [str(mapping_dict.get(v)) for v in vals if v in mapping_dict]
-#         return ";".join(sorted(set(targets))) if targets else None
-
-#     if "SalesItemLineDetail.ItemRef.value" in lines.columns:
-#         df["Mapped_Line_ItemRef"] = df["Id"].map(lambda x: get_refs(x, "SalesItemLineDetail.ItemRef.value", item_dict))
-#     if "SalesItemLineDetail.ClassRef.value" in lines.columns:
-#         df["Mapped_Line_ClassRef"] = df["Id"].map(lambda x: get_refs(x, "SalesItemLineDetail.ClassRef.value", class_dict))
-
-#     # 7. Create or update mapping table
-#     if not sql.table_exists("Map_RefundReceipt", MAPPING_SCHEMA):
-#         create_cols = ", ".join([f"[{col}] NVARCHAR(MAX)" for col in df.columns])
-#         sql.run_query(f"CREATE TABLE [{MAPPING_SCHEMA}].[Map_RefundReceipt] ({create_cols})")
-#     else:
-#         existing = sql.fetch_table("Map_RefundReceipt", MAPPING_SCHEMA)
-#         for col in df.columns:
-#             if col not in existing.columns:
-#                 sql.run_query(f"""
-#                     IF COL_LENGTH('{MAPPING_SCHEMA}.Map_RefundReceipt', '{col}') IS NULL
-#                     BEGIN ALTER TABLE [{MAPPING_SCHEMA}].[Map_RefundReceipt] ADD [{col}] NVARCHAR(MAX); END
-#                 """)
-#         sql.run_query(f"DELETE FROM [{MAPPING_SCHEMA}].[Map_RefundReceipt]")
-
-#     sql.insert_dataframe(df, "Map_RefundReceipt", MAPPING_SCHEMA)
-#     logger.info(f"✅ Inserted {len(df)} mapped rows into Map_RefundReceipt (optimized)")
 
 def ensure_mapping_table(REFUNDRECEIPT_DATE_FROM='1900-01-01', REFUNDRECEIPT_DATE_TO='2080-12-31'):
     """
@@ -506,6 +409,9 @@ def build_refundreceipt_payload(row, lines):
         "Line": []
     }
     # Optional fields
+     
+    if row_get("PaymentRefNum"):
+        payload["PaymentRefNum"] = str(row_get("PaymentRefNum"))
     if row_get("CustomerMemo.value"):
         payload["CustomerMemo"] = {"value": row_get("CustomerMemo.value")}
     if row_get("PrivateNote"):
@@ -514,6 +420,7 @@ def build_refundreceipt_payload(row, lines):
         payload["PrintStatus"] = row_get("PrintStatus")
     if row_get("BillEmail.Address"):
         payload["BillEmail"] = {"Address": row_get("BillEmail.Address")}
+
     # BillAddr
     # billaddr_fields = ["Line1", "Line2", "Line3", "Line4", "Line5", "City", "Country", "CountrySubDivisionCode", "PostalCode"]
     # billaddr = {k: row_get(f"BillAddr.{k}") for k in billaddr_fields if row_get(f"BillAddr.{k}")}

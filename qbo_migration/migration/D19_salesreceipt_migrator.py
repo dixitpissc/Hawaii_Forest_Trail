@@ -34,7 +34,9 @@ def apply_duplicate_docnumber_strategy():
         apply_duplicate_docnumber_strategy_dynamic(
         target_table="Map_SalesReceipt",
         schema=MAPPING_SCHEMA,
-        check_against_tables=["Map_Bill","Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit","Map_Purchase"])
+        check_against_tables=["Map_Bill","Map_CreditMemo","Map_Invoice","Map_Estimate","Map_VendorCredit","Map_JournalEntry","Map_Deposit","Map_Purchase"])
+
+
 
 def safe_float(val):
     """
@@ -632,7 +634,7 @@ def _post_batch_salesreceipts(eligible_batch, url, headers, timeout=40, post_bat
                     for (sid, payload) in chunk
                 ]
             }
-            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+            return  session.post(batch_url, headers=_headers, json=body, timeout=timeout)
 
         attempted_refresh = False
         for attempt in range(max_manual_retries + 1):

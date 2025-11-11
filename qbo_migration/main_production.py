@@ -200,7 +200,7 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "term",
         # "currency", 
         # "class", 
-        # "department", 
+        # "department",
         # "account",
         # "item_category",
         #  "item", 
@@ -227,7 +227,7 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "transfer"
         # "deposit", 
         # "refundreceipt", 
-        "billpayment", 
+        # "billpayment", 
         
     ]
 

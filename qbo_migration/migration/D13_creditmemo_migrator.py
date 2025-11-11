@@ -210,19 +210,23 @@ def _has_val(v):
 def _prune_empty(d: dict) -> dict:
     return {k: v for k, v in d.items() if _has_val(v)}
 
-def generate_creditmemo_payloads_in_batches(batch_size=500):
-    logger.info("⚙️ Generating payloads for CreditMemo records...")
+#Old one without department ref working 
+# def generate_creditmemo_payloads_in_batches(batch_size=500):
+#     logger.info("⚙️ Generating payloads for CreditMemo records...")
 
-    # Prefetch all lines and mapping tables for speed
-    all_lines = sql.fetch_table_with_params(f"SELECT * FROM [{SOURCE_SCHEMA}].[CreditMemo_Line]", tuple())
-    lines_grouped = all_lines.groupby("Parent_Id")
+#     # Prefetch all lines and mapping tables for speed
+#     all_lines = sql.fetch_table_with_params(f"SELECT * FROM [{SOURCE_SCHEMA}].[CreditMemo_Line]", tuple())
+#     lines_grouped = all_lines.groupby("Parent_Id")
 
-    item_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Item]", tuple())
-    item_dict = dict(zip(item_map["Source_Id"], item_map["Target_Id"]))
-    class_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
-    class_dict = dict(zip(class_map["Source_Id"], class_map["Target_Id"]))
-    account_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple())
-    account_dict = dict(zip(account_map["Source_Id"], account_map["Target_Id"]))
+#     item_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Item]", tuple())
+#     item_dict = dict(zip(item_map["Source_Id"], item_map["Target_Id"]))
+    
+#     class_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
+#     class_dict = dict(zip(class_map["Source_Id"], class_map["Target_Id"]))
+    
+#     account_map = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple())
+#     account_dict = dict(zip(account_map["Source_Id"], account_map["Target_Id"]))
+
 
 #     def build_payload_fast(row, lines, final_docnumber):
 #         payload = {
@@ -230,19 +234,15 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #             "TxnDate": row.get(CREDITMEMO_HEADER_MAPPING["TxnDate"]),
 #             "CustomerRef": {"value": str(row.get("Mapped_CustomerRef"))},
 #             "CurrencyRef": {"value": row.get(CREDITMEMO_HEADER_MAPPING["CurrencyRef.value"]) or "USD"},
-#             "ApplyTaxAfterDiscount": bool(row.get(CREDITMEMO_HEADER_MAPPING["ApplyTaxAfterDiscount"]))
-#             # "PrintStatus": row.get(CREDITMEMO_HEADER_MAPPING["PrintStatus"]),
-#             # "EmailStatus": row.get(CREDITMEMO_HEADER_MAPPING["EmailStatus"])
+#             "ApplyTaxAfterDiscount": bool(row.get(CREDITMEMO_HEADER_MAPPING["ApplyTaxAfterDiscount"])),
 #         }
 
 #         # ──────────────────────────────────────────────────────────────────────────────
-#         # Status fields (only if present; optionally enforce enums)
+#         # Status fields (only if present; enforce known enums)
 #         PRINT_OK = {"NotSet", "NeedToPrint", "PrintComplete"}
 #         EMAIL_OK = {"NotSet", "NeedToSend", "EmailSent"}
-
 #         ps = row.get(CREDITMEMO_HEADER_MAPPING.get("PrintStatus"))
 #         es = row.get(CREDITMEMO_HEADER_MAPPING.get("EmailStatus"))
-
 #         if _has_val(ps) and ps in PRINT_OK:
 #             payload["PrintStatus"] = ps
 #         if _has_val(es) and es in EMAIL_OK:
@@ -258,15 +258,16 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #         if _has_val(cust_memo):
 #             payload["CustomerMemo"] = {"value": cust_memo}
 
-#         # BillEmail (only if present)
-#         # ──────────────────────────────────────────────────────────────────────────────
-#         # BillEmail (only if present)
+#         # BillEmail / BillEmailBcc (only if present)
 #         bill_email = row.get(CREDITMEMO_HEADER_MAPPING.get("BillEmail.Address"))
 #         if _has_val(bill_email):
 #             payload["BillEmail"] = {"Address": bill_email}
+#         bill_email_bcc = row.get(CREDITMEMO_HEADER_MAPPING.get("BillEmailBcc.Address"))
+#         if _has_val(bill_email_bcc):
+#             payload["BillEmailBcc"] = {"Address": bill_email_bcc}
 
-#         # BillAddr (only if Line1 present; then prune empties)
-#         if row.get(CREDITMEMO_HEADER_MAPPING.get("BillAddr.Line1")):
+#         # BillAddr (only if Line1 present; prune empties)
+#         if _has_val(row.get(CREDITMEMO_HEADER_MAPPING.get("BillAddr.Line1"))):
 #             bill_addr = {
 #                 "Line1": row.get(CREDITMEMO_HEADER_MAPPING.get("BillAddr.Line1")),
 #                 "Line2": row.get(CREDITMEMO_HEADER_MAPPING.get("BillAddr.Line2")),
@@ -279,11 +280,9 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #                 "PostalCode": row.get(CREDITMEMO_HEADER_MAPPING.get("BillAddr.PostalCode")),
 #             }
 #             bill_addr = _prune_empty(bill_addr)
-#             if bill_addr:  # only add if something meaningful remains
+#             if bill_addr:
 #                 payload["BillAddr"] = bill_addr
 
-
-#         # ──────────────────────────────────────────────────────────────────────────────
 #         # ShipAddr (mirror BillAddr; only if Line1 present; prune)
 #         if _has_val(row.get(CREDITMEMO_HEADER_MAPPING.get("ShipAddr.Line1"))):
 #             ship_addr = {
@@ -301,8 +300,7 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #             if ship_addr:
 #                 payload["ShipAddr"] = ship_addr
 
-#         # ──────────────────────────────────────────────────────────────────────────────
-#         # (Optional) ShipFromAddr (only if Line1 present; prune)
+#         # ShipFromAddr (optional; only if Line1 present; prune)
 #         if _has_val(row.get(CREDITMEMO_HEADER_MAPPING.get("ShipFromAddr.Line1"))):
 #             ship_from = {
 #                 "Line1": row.get(CREDITMEMO_HEADER_MAPPING.get("ShipFromAddr.Line1")),
@@ -313,96 +311,76 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #             if ship_from:
 #                 payload["ShipFromAddr"] = ship_from
 
-# #------------------------------ NEW: Header-level TaxCodeRef (only if mapping exists) ---------------------------------------------
+#         # Header-level tax (only if you have a mapped code and/or total)
 #         mapped_txn_tax_code = row.get("Mapped_TxnTaxCodeRef")
-#         if "TxnTaxDetail_TotalTax" in row.index and pd.notna(row.get("TxnTaxDetail_TotalTax")):
-#             TxnTaxDetail_TotalTax = safe_float(row.get("TxnTaxDetail_TotalTax"))
-#         if mapped_txn_tax_code:
-#             payload["TxnTaxDetail"] = {
-#                 "TotalTax" :TxnTaxDetail_TotalTax,
-#                 "TxnTaxCodeRef": {"value": str(mapped_txn_tax_code)}
-#             }
-# #------------------------------ NEW: Header-level TaxCodeRef (only if mapping exists) ---------------------------------------------
+#         txn_total_tax = None
+#         if "TxnTaxDetail_TotalTax" in getattr(row, "index", []) and pd.notna(row.get("TxnTaxDetail_TotalTax")):
+#             txn_total_tax = safe_float(row.get("TxnTaxDetail_TotalTax"))
+#         if _has_val(mapped_txn_tax_code) or txn_total_tax is not None:
+#             payload["TxnTaxDetail"] = {}
+#             if txn_total_tax is not None:
+#                 payload["TxnTaxDetail"]["TotalTax"] = txn_total_tax
+#             if _has_val(mapped_txn_tax_code):
+#                 payload["TxnTaxDetail"]["TxnTaxCodeRef"] = {"value": str(mapped_txn_tax_code)}
 
-#         # Add ShipDate if present
+#         # ShipDate (optional)
 #         ship_date = row.get(CREDITMEMO_HEADER_MAPPING.get("ShipDate"))
-#         if ship_date:
+#         if _has_val(ship_date):
 #             payload["ShipDate"] = ship_date
 
-#         # Add BillEmailBcc if present
-#         bill_email_bcc = row.get(CREDITMEMO_HEADER_MAPPING.get("BillEmailBcc.Address"))
-#         if bill_email_bcc:
-#             payload["BillEmailBcc"] = {"Address": bill_email_bcc}
-
+#         # ─────────────────────────────────────────────────────────
+#         # Build lines in buckets to force a QBO-safe order
+#         # posting (sales/item/acct/journal) → discount → description → subtotal (end)
+#         # ─────────────────────────────────────────────────────────
 #         payload["Line"] = []
-
-#         # Buckets to control order
-#         sales_lines = []          # SalesItemLineDetail
-#         item_exp_lines = []       # ItemBasedExpenseLineDetail (rare on sales forms)
-#         acct_exp_lines = []       # AccountBasedExpenseLineDetail (rare on sales forms)
-#         journal_lines = []        # JournalEntryLineDetail (not typical for CreditMemo/Invoice)
-#         discount_lines = []       # DiscountLineDetail
-#         desc_lines = []           # Description-only
-#         subtotal_lines = []       # SubTotalLineDetail (will be forced to end)
-#         header_tax_lines = []     # TaxLineDetail (usually should go under TxnTaxDetail, not Line)
+#         sales_lines, item_exp_lines, acct_exp_lines = [], [], []
+#         journal_lines, discount_lines, desc_lines, subtotal_lines = [], [], [], []
+#         header_tax_lines = []  # collected but not pushed into Line[]
 
 #         for _, ln in lines.iterrows():
 #             detail_type = ln.get("DetailType")
 #             if not detail_type:
 #                 continue
 
-#             # Build base line
+#             # Normalize description
+#             desc = (ln.get("Description") or "").strip()
 #             amt = safe_float(ln.get("Amount"))
-#             line = {"DetailType": detail_type}
-#             if amt is not None:
-#                 line["Amount"] = amt
-
-#             # Description (optional)
-#             desc = ln.get("Description")
-#             if _has_val(desc):
-#                 line["Description"] = str(desc).strip()[:4000]
 
 #             # ───────── SalesItemLineDetail ─────────
 #             if detail_type == "SalesItemLineDetail":
 #                 item_id = item_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ItemRef.value"]))
-#                 qty = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.Qty"]))
-#                 upr = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.UnitPrice"]))
-#                 tax_code_val = ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.TaxCodeRef.value"]) or "NON"
-
-#                 # If no item, we cannot post a sales line; convert to Description or skip
 #                 if not item_id:
-#                     # convert zero-posting line to DescriptionLineDetail if there is a description
-#                     if _has_val(desc):
-#                         desc_lines.append({"DetailType": "DescriptionLineDetail", "DescriptionLineDetail": {}, "Description": line.get("Description", "")})
-#                     continue
-
-#                 # QBO often rejects zero-amount sales lines; if zero, convert to Description
-#                 if (amt is None or amt == 0.0) and not (qty and upr and qty * upr > 0):
-#                     if _has_val(desc):
-#                         desc_lines.append({"DetailType": "DescriptionLineDetail", "DescriptionLineDetail": {}, "Description": line.get("Description", "")})
+#                     # If no item, post a description-only line instead (if there is a description)
+#                     if desc:
+#                         desc_lines.append({"DetailType": "DescriptionOnly", "Description": desc, "DescriptionLineDetail": {}})
 #                     continue
 
 #                 detail = {
 #                     "ItemRef": {"value": str(item_id)},
-#                     "TaxCodeRef": {"value": tax_code_val}
+#                     "TaxCodeRef": {"value": ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.TaxCodeRef.value"]) or "NON"},
 #                 }
+#                 qty = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.Qty"]))
+#                 upr = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.UnitPrice"]))
 #                 if qty is not None:
 #                     detail["Qty"] = qty
 #                 if upr is not None:
 #                     detail["UnitPrice"] = upr
 
-#                 # Optional ServiceDate
 #                 srdate = ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ServiceDate"])
 #                 if _has_val(srdate):
 #                     detail["ServiceDate"] = srdate
 
-#                 # Optional Class
 #                 class_id = class_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ClassRef.value"]))
 #                 if class_id:
 #                     detail["ClassRef"] = {"value": str(class_id)}
 
-#                 line["SalesItemLineDetail"] = detail
-#                 sales_lines.append(line)
+                                
+#                 line_obj = {"DetailType": "SalesItemLineDetail", "SalesItemLineDetail": detail}
+#                 if amt is not None:
+#                     line_obj["Amount"] = amt
+#                 if desc:
+#                     line_obj["Description"] = desc
+#                 sales_lines.append(line_obj)
 #                 continue
 
 #             # ───────── AccountBasedExpenseLineDetail (rare on sales) ─────────
@@ -410,8 +388,15 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #                 account_id = account_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["AccountBasedExpenseLineDetail.AccountRef.value"]))
 #                 if not account_id:
 #                     continue
-#                 line["AccountBasedExpenseLineDetail"] = {"AccountRef": {"value": str(account_id)}}
-#                 acct_exp_lines.append(line)
+#                 line_obj = {
+#                     "DetailType": "AccountBasedExpenseLineDetail",
+#                     "AccountBasedExpenseLineDetail": {"AccountRef": {"value": str(account_id)}},
+#                 }
+#                 if amt is not None:
+#                     line_obj["Amount"] = amt
+#                 if desc:
+#                     line_obj["Description"] = desc
+#                 acct_exp_lines.append(line_obj)
 #                 continue
 
 #             # ───────── ItemBasedExpenseLineDetail (rare on sales) ─────────
@@ -422,74 +407,96 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #                     continue
 #                 detail = {
 #                     "Qty": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.Qty"])),
-#                     "UnitPrice": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.UnitPrice"]))
+#                     "UnitPrice": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.UnitPrice"])),
 #                 }
 #                 if item_id:
 #                     detail["ItemRef"] = {"value": str(item_id)}
 #                 if account_id:
 #                     detail["AccountRef"] = {"value": str(account_id)}
-#                 line["ItemBasedExpenseLineDetail"] = detail
-#                 item_exp_lines.append(line)
+#                 line_obj = {"DetailType": "ItemBasedExpenseLineDetail", "ItemBasedExpenseLineDetail": detail}
+#                 if amt is not None:
+#                     line_obj["Amount"] = amt
+#                 if desc:
+#                     line_obj["Description"] = desc
+#                 item_exp_lines.append(line_obj)
 #                 continue
 
-#             # ───────── JournalEntryLineDetail (generally not used for invoices/CM) ─────────
+#             # ───────── JournalEntryLineDetail (uncommon on invoices/CM) ─────────
 #             if detail_type == "JournalEntryLineDetail":
 #                 account_id = account_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.AccountRef.value"]))
 #                 if not account_id:
 #                     continue
 #                 detail = {
 #                     "AccountRef": {"value": str(account_id)},
-#                     "PostingType": ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.PostingType"])
+#                     "PostingType": ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.PostingType"]),
 #                 }
-#                 line["JournalEntryLineDetail"] = detail
-#                 journal_lines.append(line)
+#                 line_obj = {"DetailType": "JournalEntryLineDetail", "JournalEntryLineDetail": detail}
+#                 if amt is not None:
+#                     line_obj["Amount"] = amt
+#                 if desc:
+#                     line_obj["Description"] = desc
+#                 journal_lines.append(line_obj)
 #                 continue
 
-#             # ───────── TaxLineDetail (should be header TxnTaxDetail; capture aside) ─────────
+#             # ───────── TaxLineDetail (capture for header; do not add to Line[]) ─────────
 #             if detail_type == "TaxLineDetail":
 #                 detail = {
 #                     "TaxRateRef": {"value": ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxRateRef.value"])},
 #                     "PercentBased": bool(ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.PercentBased"]) == True),
-#                     "TaxPercent": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxPercent"]))
+#                     "TaxPercent": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxPercent"])),
 #                 }
-#                 # Do not append to payload["Line"]; stash for header-level TxnTaxDetail building
 #                 header_tax_lines.append({"Amount": amt, "TaxLineDetail": detail})
 #                 continue
 
-#             # # ───────── Description-only ─────────
-#             # if detail_type in ("DescriptionOnly", "DescriptionLineDetail"):
-#             #     desc_lines.append({"DetailType": "DescriptionLineDetail", "DescriptionLineDetail": {}, "Description": line.get("Description", "")})
-#             #     continue
+#             # ───────── Description-only (no Amount; must include DescriptionLineDetail) ─────────
+#             if detail_type in ("DescriptionOnly", "DescriptionLineDetail"):
+#                 if not desc:
+#                     continue  # don’t send empty description lines
+#                 desc_lines.append({
+#                     "DetailType": "DescriptionOnly",
+#                     "Description": desc,
+#                     "DescriptionLineDetail": {},
+#                 })
+#                 continue
 
-#             # # ───────── TDSLineDetail (India) ─────────
-#             # if detail_type == "TDSLineDetail":
-#             #     line["TDSLineDetail"] = ln.get("TDSLineDetail") or {}
-#             #     # Place before subtotal if you use it as posting; otherwise treat as other
-#             #     sales_lines.append(line)
-#             #     continue
+#             # ───────── SubTotal (no Amount field other than computed) ─────────
+#             if detail_type == "SubTotalLineDetail":
+#                 subtotal_lines.append({"DetailType": "SubTotalLineDetail", "SubTotalLineDetail": {}})
+#                 continue
 
-#             # # ───────── Subtotal (will be forced to end) ─────────
-#             # if detail_type == "SubTotalLineDetail":
-#             #     line["SubTotalLineDetail"] = {}
-#             #     subtotal_lines.append(line)
-#             #     continue
+#             # ───────── Discount (global). Provide either percent or amount; no line-level Amount. ─────────
+#             if detail_type == "DiscountLineDetail":
+#                 disc_detail = {}
+#                 if ln.get("DiscountLineDetail.PercentBased") is True:
+#                     dp = safe_float(ln.get("DiscountLineDetail.DiscountPercent"))
+#                     if dp is None:
+#                         continue
+#                     disc_detail["PercentBased"] = True
+#                     disc_detail["DiscountPercent"] = dp
+#                 else:
+#                     da = safe_float(ln.get("DiscountLineDetail.DiscountAmt"))
+#                     if da is None:
+#                         continue
+#                     disc_detail["PercentBased"] = False
+#                     disc_detail["DiscountAmt"] = da
 
-#             # # ───────── Discount (global) ─────────
-#             # if detail_type == "DiscountLineDetail":
-#             #     detail = {
-#             #         "PercentBased": ln.get("DiscountLineDetail.PercentBased") == True,
-#             #         "DiscountPercent": safe_float(ln.get("DiscountLineDetail.DiscountPercent"))
-#             #     }
-#             #     line["DiscountLineDetail"] = detail
-#             #     discount_lines.append(line)
-#             #     continue
+#                 disc_line = {
+#                     "DetailType": "DiscountLineDetail",
+#                     "DiscountLineDetail": disc_detail,
+#                 }
+#                 if desc:
+#                     disc_line["Description"] = desc
+#                 discount_lines.append(disc_line)
+#                 continue
 
-#             # logger.warning(f"⚠️ Unknown DetailType: {detail_type} — skipped")
+#             # ───────── TDS (India) — skip for US books to avoid 2010 ─────────
+#             if detail_type == "TDSLineDetail":
+#                 logger.warning("Skipping TDSLineDetail (unsupported for this company/region).")
+#                 continue
 
-#         # ─────────────────────────────────────────────────────────
-#         # Assemble in a QBO-safe order:
-#         # posting (sales/item/acct/journal) → discount → description → subtotal (end)
-#         # ─────────────────────────────────────────────────────────
+#             logger.warning(f"⚠️ Unknown DetailType: {detail_type} — skipped")
+
+#         # Final QBO-safe ordering
 #         ordered = []
 #         ordered.extend(sales_lines)
 #         ordered.extend(item_exp_lines)
@@ -497,19 +504,95 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 #         ordered.extend(journal_lines)
 #         ordered.extend(discount_lines)
 #         ordered.extend(desc_lines)
-#         ordered.extend(subtotal_lines)   # must come after items it sums
-
+#         ordered.extend(subtotal_lines)  # must be last
 #         payload["Line"] = ordered
 
-#         # Optional: If you captured header_tax_lines above, build TxnTaxDetail here
-#         # (recommended to compute header tax separately rather than mixing in lines)
-#         # Example:
-#         # if header_tax_lines:
-#         #     payload["TxnTaxDetail"] = {
-#         #         "TaxLine": [{"Amount": l["Amount"], "DetailType": "TaxLineDetail", "TaxLineDetail": l["TaxLineDetail"]} for l in header_tax_lines]
-#         #     }
+#         # If you collected TaxLineDetail rows, you can optionally include them under TxnTaxDetail.TaxLine
+#         # (Header-level code+TotalTax was already handled above.)
+#         if header_tax_lines:
+#             payload.setdefault("TxnTaxDetail", {})
+#             payload["TxnTaxDetail"]["TaxLine"] = [
+#                 {"Amount": l["Amount"], "DetailType": "TaxLineDetail", "TaxLineDetail": l["TaxLineDetail"]}
+#                 for l in header_tax_lines
+#                 if l.get("Amount") is not None
+#             ]
 
-#         return payload
+#         return deep_clean(payload)
+
+
+#     while True:
+#         df = sql.fetch_table_with_params(f"""
+#             SELECT TOP {batch_size} * FROM [{MAPPING_SCHEMA}].[Map_CreditMemo]
+#             WHERE Porter_Status = 'Ready' AND (Payload_JSON IS NULL OR Payload_JSON = '')
+#         """, ())
+#         if df.empty:
+#             logger.info("✅ All payloads generated.")
+#             break
+#         docnumber_map = {}
+#         for _, row in df.iterrows():
+#             sid = row["Source_Id"]
+#             raw_docnum = row.get("Duplicate_Docnumber") or row.get("DocNumber")
+#             raw_docnum = str(raw_docnum).strip() if raw_docnum is not None else ""
+#             if raw_docnum.lower() == "null" or raw_docnum == "":
+#                 docnumber_map[sid] = None
+#             else:
+#                 docnumber_map[sid] = raw_docnum[:21]
+#         for _, row in df.iterrows():
+#             sid = row["Source_Id"]
+#             if not row.get("Mapped_CustomerRef"):
+#                 update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Failed", failure_reason="Missing CustomerRef")
+#                 continue
+#             # Use prefetched lines
+#             lines = lines_grouped.get_group(sid) if sid in lines_grouped.groups else pd.DataFrame()
+#             final_docnumber = docnumber_map[sid]
+#             payload = build_payload_fast(row, lines, final_docnumber)
+#             if not payload.get("Line"):
+#                 update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Failed", failure_reason="No Line items")
+#                 continue
+#             if final_docnumber is None and "DocNumber" in payload:
+#                 del payload["DocNumber"]
+#             pretty_json = json.dumps(payload, indent=2)
+#             update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Ready", payload=json.loads(pretty_json))
+#         logger.info(f"✅ Processed {len(df)} payloads in this batch.")
+
+def generate_creditmemo_payloads_in_batches(batch_size=500):
+    logger.info("⚙️ Generating payloads for CreditMemo records...")
+
+    # Prefetch all lines and mapping tables for speed
+    all_lines = sql.fetch_table_with_params(f"SELECT * FROM [{SOURCE_SCHEMA}].[CreditMemo_Line]", tuple())
+    lines_grouped = all_lines.groupby("Parent_Id")
+
+    item_map = sql.fetch_table_with_params(
+        f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Item]", tuple()
+    )
+    item_dict = dict(zip(item_map["Source_Id"], item_map["Target_Id"]))
+
+    class_map = sql.fetch_table_with_params(
+        f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple()
+    )
+    class_dict = dict(zip(class_map["Source_Id"], class_map["Target_Id"]))
+
+    account_map = sql.fetch_table_with_params(
+        f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple()
+    )
+    account_dict = dict(zip(account_map["Source_Id"], account_map["Target_Id"]))
+
+    # ─────────────────────────────────────────────────────────
+    # Optional Map_Department (load only if table exists / not empty)
+    # ─────────────────────────────────────────────────────────
+    dept_dict = {}
+    try:
+        dept_map = sql.fetch_table_with_params(
+            f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple()
+        )
+        if not dept_map.empty:
+            dept_dict = dict(zip(dept_map["Source_Id"], dept_map["Target_Id"]))
+            logger.info("✅ Loaded Map_Department for DepartmentRef mapping.")
+        else:
+            logger.info("ℹ️ Map_Department is empty — DepartmentRef mapping will be skipped.")
+    except Exception as e:
+        logger.info(f"ℹ️ Map_Department not found or failed to load — DepartmentRef mapping skipped. ({e})")
+        dept_dict = {}
 
     def build_payload_fast(row, lines, final_docnumber):
         payload = {
@@ -520,8 +603,20 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
             "ApplyTaxAfterDiscount": bool(row.get(CREDITMEMO_HEADER_MAPPING["ApplyTaxAfterDiscount"])),
         }
 
-        # ──────────────────────────────────────────────────────────────────────────────
+        # ─────────────────────────────────────────────────────────
+        # Header-level DepartmentRef (optional, only if Map_Department loaded)
+        # ─────────────────────────────────────────────────────────
+        if dept_dict:
+            dept_col = CREDITMEMO_HEADER_MAPPING.get("DepartmentRef.value")
+            if dept_col:
+                src_dept = row.get(dept_col)
+                mapped_dept = dept_dict.get(src_dept)
+                if mapped_dept:
+                    payload["DepartmentRef"] = {"value": str(mapped_dept)}
+
+        # ─────────────────────────────────────────────────────────
         # Status fields (only if present; enforce known enums)
+        # ─────────────────────────────────────────────────────────
         PRINT_OK = {"NotSet", "NeedToPrint", "PrintComplete"}
         EMAIL_OK = {"NotSet", "NeedToSend", "EmailSent"}
         ps = row.get(CREDITMEMO_HEADER_MAPPING.get("PrintStatus"))
@@ -531,7 +626,6 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
         if _has_val(es) and es in EMAIL_OK:
             payload["EmailStatus"] = es
 
-        # ──────────────────────────────────────────────────────────────────────────────
         # Notes (only if present)
         priv_note = row.get(CREDITMEMO_HEADER_MAPPING.get("PrivateNote"))
         if _has_val(priv_note):
@@ -613,7 +707,6 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 
         # ─────────────────────────────────────────────────────────
         # Build lines in buckets to force a QBO-safe order
-        # posting (sales/item/acct/journal) → discount → description → subtotal (end)
         # ─────────────────────────────────────────────────────────
         payload["Line"] = []
         sales_lines, item_exp_lines, acct_exp_lines = [], [], []
@@ -631,16 +724,24 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
 
             # ───────── SalesItemLineDetail ─────────
             if detail_type == "SalesItemLineDetail":
-                item_id = item_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ItemRef.value"]))
+                item_id = item_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ItemRef.value"])
+                )
                 if not item_id:
                     # If no item, post a description-only line instead (if there is a description)
                     if desc:
-                        desc_lines.append({"DetailType": "DescriptionOnly", "Description": desc, "DescriptionLineDetail": {}})
+                        desc_lines.append({
+                            "DetailType": "DescriptionOnly",
+                            "Description": desc,
+                            "DescriptionLineDetail": {},
+                        })
                     continue
 
                 detail = {
                     "ItemRef": {"value": str(item_id)},
-                    "TaxCodeRef": {"value": ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.TaxCodeRef.value"]) or "NON"},
+                    "TaxCodeRef": {
+                        "value": ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.TaxCodeRef.value"]) or "NON"
+                    },
                 }
                 qty = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.Qty"]))
                 upr = safe_float(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.UnitPrice"]))
@@ -653,9 +754,21 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 if _has_val(srdate):
                     detail["ServiceDate"] = srdate
 
-                class_id = class_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ClassRef.value"]))
+                # ClassRef (existing)
+                class_id = class_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["SalesItemLineDetail.ClassRef.value"])
+                )
                 if class_id:
                     detail["ClassRef"] = {"value": str(class_id)}
+
+                # DepartmentRef (optional; only if Map_Department loaded and mapping key exists)
+                if dept_dict:
+                    dept_key = CREDITMEMO_LINE_MAPPING.get("SalesItemLineDetail.DepartmentRef.value")
+                    if dept_key:
+                        dept_src = ln.get(dept_key)
+                        dept_id = dept_dict.get(dept_src)
+                        if dept_id:
+                            detail["DepartmentRef"] = {"value": str(dept_id)}
 
                 line_obj = {"DetailType": "SalesItemLineDetail", "SalesItemLineDetail": detail}
                 if amt is not None:
@@ -665,14 +778,29 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 sales_lines.append(line_obj)
                 continue
 
-            # ───────── AccountBasedExpenseLineDetail (rare on sales) ─────────
+            # ───────── AccountBasedExpenseLineDetail ─────────
             if detail_type == "AccountBasedExpenseLineDetail":
-                account_id = account_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["AccountBasedExpenseLineDetail.AccountRef.value"]))
+                account_id = account_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["AccountBasedExpenseLineDetail.AccountRef.value"])
+                )
                 if not account_id:
                     continue
+                detail = {
+                    "AccountRef": {"value": str(account_id)},
+                }
+
+                # Optional DepartmentRef
+                if dept_dict:
+                    dept_key = CREDITMEMO_LINE_MAPPING.get("AccountBasedExpenseLineDetail.DepartmentRef.value")
+                    if dept_key:
+                        dept_src = ln.get(dept_key)
+                        dept_id = dept_dict.get(dept_src)
+                        if dept_id:
+                            detail["DepartmentRef"] = {"value": str(dept_id)}
+
                 line_obj = {
                     "DetailType": "AccountBasedExpenseLineDetail",
-                    "AccountBasedExpenseLineDetail": {"AccountRef": {"value": str(account_id)}},
+                    "AccountBasedExpenseLineDetail": detail,
                 }
                 if amt is not None:
                     line_obj["Amount"] = amt
@@ -681,21 +809,42 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 acct_exp_lines.append(line_obj)
                 continue
 
-            # ───────── ItemBasedExpenseLineDetail (rare on sales) ─────────
+            # ───────── ItemBasedExpenseLineDetail ─────────
             if detail_type == "ItemBasedExpenseLineDetail":
-                item_id = item_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.ItemRef.value"]))
-                account_id = account_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.AccountRef.value"]))
+                item_id = item_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.ItemRef.value"])
+                )
+                account_id = account_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.AccountRef.value"])
+                )
                 if not item_id and not account_id:
                     continue
                 detail = {
-                    "Qty": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.Qty"])),
-                    "UnitPrice": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.UnitPrice"])),
+                    "Qty": safe_float(
+                        ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.Qty"])
+                    ),
+                    "UnitPrice": safe_float(
+                        ln.get(CREDITMEMO_LINE_MAPPING["ItemBasedExpenseLineDetail.UnitPrice"])
+                    ),
                 }
                 if item_id:
                     detail["ItemRef"] = {"value": str(item_id)}
                 if account_id:
                     detail["AccountRef"] = {"value": str(account_id)}
-                line_obj = {"DetailType": "ItemBasedExpenseLineDetail", "ItemBasedExpenseLineDetail": detail}
+
+                # Optional DepartmentRef
+                if dept_dict:
+                    dept_key = CREDITMEMO_LINE_MAPPING.get("ItemBasedExpenseLineDetail.DepartmentRef.value")
+                    if dept_key:
+                        dept_src = ln.get(dept_key)
+                        dept_id = dept_dict.get(dept_src)
+                        if dept_id:
+                            detail["DepartmentRef"] = {"value": str(dept_id)}
+
+                line_obj = {
+                    "DetailType": "ItemBasedExpenseLineDetail",
+                    "ItemBasedExpenseLineDetail": detail,
+                }
                 if amt is not None:
                     line_obj["Amount"] = amt
                 if desc:
@@ -703,16 +852,33 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 item_exp_lines.append(line_obj)
                 continue
 
-            # ───────── JournalEntryLineDetail (uncommon on invoices/CM) ─────────
+            # ───────── JournalEntryLineDetail ─────────
             if detail_type == "JournalEntryLineDetail":
-                account_id = account_dict.get(ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.AccountRef.value"]))
+                account_id = account_dict.get(
+                    ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.AccountRef.value"])
+                )
                 if not account_id:
                     continue
                 detail = {
                     "AccountRef": {"value": str(account_id)},
-                    "PostingType": ln.get(CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.PostingType"]),
+                    "PostingType": ln.get(
+                        CREDITMEMO_LINE_MAPPING["JournalEntryLineDetail.PostingType"]
+                    ),
                 }
-                line_obj = {"DetailType": "JournalEntryLineDetail", "JournalEntryLineDetail": detail}
+
+                # Optional DepartmentRef
+                if dept_dict:
+                    dept_key = CREDITMEMO_LINE_MAPPING.get("JournalEntryLineDetail.DepartmentRef.value")
+                    if dept_key:
+                        dept_src = ln.get(dept_key)
+                        dept_id = dept_dict.get(dept_src)
+                        if dept_id:
+                            detail["DepartmentRef"] = {"value": str(dept_id)}
+
+                line_obj = {
+                    "DetailType": "JournalEntryLineDetail",
+                    "JournalEntryLineDetail": detail,
+                }
                 if amt is not None:
                     line_obj["Amount"] = amt
                 if desc:
@@ -720,17 +886,23 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 journal_lines.append(line_obj)
                 continue
 
-            # ───────── TaxLineDetail (capture for header; do not add to Line[]) ─────────
+            # ───────── TaxLineDetail (captured for header only) ─────────
             if detail_type == "TaxLineDetail":
                 detail = {
-                    "TaxRateRef": {"value": ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxRateRef.value"])},
-                    "PercentBased": bool(ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.PercentBased"]) == True),
-                    "TaxPercent": safe_float(ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxPercent"])),
+                    "TaxRateRef": {
+                        "value": ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxRateRef.value"])
+                    },
+                    "PercentBased": bool(
+                        ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.PercentBased"]) is True
+                    ),
+                    "TaxPercent": safe_float(
+                        ln.get(CREDITMEMO_LINE_MAPPING["TaxLineDetail.TaxPercent"])
+                    ),
                 }
                 header_tax_lines.append({"Amount": amt, "TaxLineDetail": detail})
                 continue
 
-            # ───────── Description-only (no Amount; must include DescriptionLineDetail) ─────────
+            # ───────── Description-only ─────────
             if detail_type in ("DescriptionOnly", "DescriptionLineDetail"):
                 if not desc:
                     continue  # don’t send empty description lines
@@ -741,12 +913,15 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 })
                 continue
 
-            # ───────── SubTotal (no Amount field other than computed) ─────────
+            # ───────── SubTotal ─────────
             if detail_type == "SubTotalLineDetail":
-                subtotal_lines.append({"DetailType": "SubTotalLineDetail", "SubTotalLineDetail": {}})
+                subtotal_lines.append({
+                    "DetailType": "SubTotalLineDetail",
+                    "SubTotalLineDetail": {},
+                })
                 continue
 
-            # ───────── Discount (global). Provide either percent or amount; no line-level Amount. ─────────
+            # ───────── Discount (global) ─────────
             if detail_type == "DiscountLineDetail":
                 disc_detail = {}
                 if ln.get("DiscountLineDetail.PercentBased") is True:
@@ -789,19 +964,24 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
         ordered.extend(subtotal_lines)  # must be last
         payload["Line"] = ordered
 
-        # If you collected TaxLineDetail rows, you can optionally include them under TxnTaxDetail.TaxLine
-        # (Header-level code+TotalTax was already handled above.)
+        # If you collected TaxLineDetail rows, include under TxnTaxDetail.TaxLine
         if header_tax_lines:
             payload.setdefault("TxnTaxDetail", {})
             payload["TxnTaxDetail"]["TaxLine"] = [
-                {"Amount": l["Amount"], "DetailType": "TaxLineDetail", "TaxLineDetail": l["TaxLineDetail"]}
+                {
+                    "Amount": l["Amount"],
+                    "DetailType": "TaxLineDetail",
+                    "TaxLineDetail": l["TaxLineDetail"],
+                }
                 for l in header_tax_lines
                 if l.get("Amount") is not None
             ]
 
         return deep_clean(payload)
 
-
+    # ─────────────────────────────────────────────────────────
+    # Batch loop
+    # ─────────────────────────────────────────────────────────
     while True:
         df = sql.fetch_table_with_params(f"""
             SELECT TOP {batch_size} * FROM [{MAPPING_SCHEMA}].[Map_CreditMemo]
@@ -810,6 +990,8 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
         if df.empty:
             logger.info("✅ All payloads generated.")
             break
+
+        # Precompute DocNumber map for this batch
         docnumber_map = {}
         for _, row in df.iterrows():
             sid = row["Source_Id"]
@@ -819,22 +1001,52 @@ def generate_creditmemo_payloads_in_batches(batch_size=500):
                 docnumber_map[sid] = None
             else:
                 docnumber_map[sid] = raw_docnum[:21]
+
         for _, row in df.iterrows():
             sid = row["Source_Id"]
+
             if not row.get("Mapped_CustomerRef"):
-                update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Failed", failure_reason="Missing CustomerRef")
+                update_mapping_status(
+                    MAPPING_SCHEMA,
+                    "Map_CreditMemo",
+                    sid,
+                    "Failed",
+                    failure_reason="Missing CustomerRef",
+                )
                 continue
+
             # Use prefetched lines
-            lines = lines_grouped.get_group(sid) if sid in lines_grouped.groups else pd.DataFrame()
+            lines = (
+                lines_grouped.get_group(sid)
+                if sid in lines_grouped.groups
+                else pd.DataFrame()
+            )
             final_docnumber = docnumber_map[sid]
+
             payload = build_payload_fast(row, lines, final_docnumber)
             if not payload.get("Line"):
-                update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Failed", failure_reason="No Line items")
+                update_mapping_status(
+                    MAPPING_SCHEMA,
+                    "Map_CreditMemo",
+                    sid,
+                    "Failed",
+                    failure_reason="No Line items",
+                )
                 continue
+
+            # If no DocNumber, drop field to let QBO auto-assign
             if final_docnumber is None and "DocNumber" in payload:
                 del payload["DocNumber"]
+
             pretty_json = json.dumps(payload, indent=2)
-            update_mapping_status(MAPPING_SCHEMA, "Map_CreditMemo", sid, "Ready", payload=json.loads(pretty_json))
+            update_mapping_status(
+                MAPPING_SCHEMA,
+                "Map_CreditMemo",
+                sid,
+                "Ready",
+                payload=json.loads(pretty_json),
+            )
+
         logger.info(f"✅ Processed {len(df)} payloads in this batch.")
 
 session = requests.Session()

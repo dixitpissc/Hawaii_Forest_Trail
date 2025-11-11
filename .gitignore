@@ -18,3 +18,5 @@ qbo_migration/.env_source
 .env
 
 .env_source
+
+old_data/

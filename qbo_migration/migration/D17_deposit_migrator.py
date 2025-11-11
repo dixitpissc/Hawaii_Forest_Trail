@@ -149,6 +149,142 @@ def add_txn_tax_detail_from_row(payload: dict, row) -> None:
     if tax_detail:
         payload["TxnTaxDetail"] = tax_detail
 
+# def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12-31'):
+#     """
+#     Ensures the Map_Deposit table is initialized with deposit data.
+#     Optimized for millions of rows:
+#     - Bulk fetch of Deposit + Deposit_Line
+#     - Preload all Map_* tables into dictionaries
+#     - Vectorized pandas mappings
+#     - Groupby aggregation for line-level refs
+#     """
+
+#     # 1. Date filter
+#     date_from = DEPOSIT_DATE_FROM
+#     date_to = DEPOSIT_DATE_TO
+#     query = f"""
+#         SELECT * FROM [{SOURCE_SCHEMA}].[Deposit]
+#         WHERE EXISTS (
+#             SELECT 1 FROM [{SOURCE_SCHEMA}].[Deposit_Line] l WHERE l.Parent_Id = [{SOURCE_SCHEMA}].[Deposit].Id
+#         )
+#         {"AND TxnDate >= ?" if date_from else ""}
+#         {"AND TxnDate <= ?" if date_to else ""}
+#     """
+#     params = tuple(p for p in [date_from, date_to] if p)
+#     df = sql.fetch_table_with_params(query, params)
+
+#     if df.empty:
+#         logger.info("⚠️ No deposit records found with lines in specified range.")
+#         return
+
+#     # 2. Core migration fields
+#     df["Source_Id"] = df["Id"]
+#     df["Target_Id"] = None
+#     df["Porter_Status"] = "Ready"
+#     df["Retry_Count"] = 0
+#     df["Failure_Reason"] = None
+#     required_cols = [
+#         "Payload_JSON",
+#         "Mapped_EntityRefs",
+#         "Mapped_AccountRefs",
+#         "Mapped_ClassRefs",
+#         "Mapped_PaymentMethodRefs",
+#         "Mapped_DepartmentRef",
+#         "Mapped_DepositToAccount",
+#         "Mapped_CurrencyRef",
+#     ]
+#     for col in required_cols:
+#         if col not in df.columns:
+#             df[col] = None
+
+#     # 3. Bulk load mapping tables into dicts
+#     def load_map(table):
+#         t = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{table}]", tuple())
+#         return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
+
+#     customer_dict = load_map("Map_Customer")
+#     account_dict = load_map("Map_Account")
+#     class_dict = load_map("Map_Class")
+#     payment_dict = load_map("Map_PaymentMethod")
+#     dept_dict = load_map("Map_Department")
+
+#     # NEW: TaxCode and TaxRate mapping (optional but preferred)
+#     taxcode_dict = load_map("Map_TaxCode") if sql.table_exists("Map_TaxCode", MAPPING_SCHEMA) else {}
+#     taxrate_dict = load_map("Map_TaxRate") if sql.table_exists("Map_TaxRate", MAPPING_SCHEMA) else {}
+
+#     # 4. Bulk fetch Deposit_Line and group
+#     deposit_lines = sql.fetch_table_with_params(f"SELECT * FROM [{SOURCE_SCHEMA}].[Deposit_Line]", tuple())
+#     deposit_lines_grouped = deposit_lines.groupby("Parent_Id") if not deposit_lines.empty else {}
+
+#     # 5. Resolve line-level mappings
+#     def get_refs(parent_id, col, mapping_dict):
+#         if parent_id not in deposit_lines_grouped.groups:
+#             return None
+#         vals = deposit_lines_grouped.get_group(parent_id)[col].dropna().unique()
+#         targets = [str(mapping_dict.get(v)) for v in vals if v in mapping_dict]
+#         return ";".join(sorted(set(targets))) if targets else None
+
+#     df["Mapped_EntityRefs"] = df["Id"].map(
+#         lambda x: get_refs(x, LINE_MAP["DepositLineDetail.Entity.value"], customer_dict)
+#     )
+#     df["Mapped_AccountRefs"] = df["Id"].map(
+#         lambda x: get_refs(x, LINE_MAP["DepositLineDetail.AccountRef.value"], account_dict)
+#     )
+#     df["Mapped_ClassRefs"] = df["Id"].map(
+#         lambda x: get_refs(x, LINE_MAP["DepositLineDetail.ClassRef.value"], class_dict)
+#     )
+#     df["Mapped_PaymentMethodRefs"] = df["Id"].map(
+#         lambda x: get_refs(x, LINE_MAP["DepositLineDetail.PaymentMethodRef.value"], payment_dict)
+#     )
+
+#     # 6. Header-level mappings
+#     df["Mapped_DepositToAccount"] = df[HEADER_MAP["DepositToAccountRef.value"]].map(
+#         lambda x: account_dict.get(x) if pd.notna(x) else None
+#     )
+#     df["Mapped_CurrencyRef"] = df[HEADER_MAP["CurrencyRef.value"]].fillna("USD")
+#     df["Mapped_DepartmentRef"] = df.get("DepartmentRef.value", None).map(
+#         lambda x: dept_dict.get(x) if pd.notna(x) else None
+#     )
+
+#     # NEW: Map header-level TxnTaxCodeRef (from source header column)
+#     # Source column name provided: [TxnTaxDetail.TxnTaxCodeRef.value]
+#     source_tax_col = "TxnTaxDetail.TxnTaxCodeRef.value"
+#     if source_tax_col in df.columns:
+#         def _map_taxcode(src):
+#             if pd.isna(src):
+#                 return None
+#             tgt = taxcode_dict.get(src)
+#             if not tgt:
+#                 # If mapping is missing, leave None (QBO will default/allow per-tenant settings)
+#                 logger.debug(f"🔎 Missing TaxCode mapping for Source_Id={src}")
+#             return tgt
+#         df["Mapped_TxnTaxCodeRef"] = df[source_tax_col].map(_map_taxcode)
+#     else:
+#         df["Mapped_TxnTaxCodeRef"] = None
+    
+#     #######################
+
+#     source_tax_col = "TxnTaxDetail.TaxLine[0].TaxLineDetail.TaxRateRef.value"
+#     if source_tax_col in df.columns:
+#         def _map_taxrate(src):
+#             if pd.isna(src):
+#                 return None
+#             tgt = taxrate_dict.get(src)
+#             if not tgt:
+#                 # If mapping is missing, leave None (QBO will default/allow per-tenant settings)
+#                 logger.debug(f"🔎 Missing TaxRate mapping for Source_Id={src}")
+#             return tgt
+#         df["Mapped_TxnTaxRateRef"] = df[source_tax_col].map(_map_taxrate)
+#     else:
+#         df["Mapped_TxnTaxRateRef"] = None
+
+#     # 7. Clear & insert
+#     if sql.table_exists("Map_Deposit", MAPPING_SCHEMA):
+#         sql.run_query(f"TRUNCATE TABLE [{MAPPING_SCHEMA}].[Map_Deposit]")
+
+#     sql.insert_invoice_map_dataframe(df, "Map_Deposit", MAPPING_SCHEMA)
+#     logger.info(f"✅ Inserted {len(df)} rows into {MAPPING_SCHEMA}.Map_Deposit")
+
 def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12-31'):
     """
     Ensures the Map_Deposit table is initialized with deposit data.
@@ -203,6 +339,7 @@ def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12
         return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
 
     customer_dict = load_map("Map_Customer")
+    vendor_dict = load_map("Map_Vendor")            # <-- NEW: load vendor mapping
     account_dict = load_map("Map_Account")
     class_dict = load_map("Map_Class")
     payment_dict = load_map("Map_PaymentMethod")
@@ -224,9 +361,61 @@ def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12
         targets = [str(mapping_dict.get(v)) for v in vals if v in mapping_dict]
         return ";".join(sorted(set(targets))) if targets else None
 
-    df["Mapped_EntityRefs"] = df["Id"].map(
-        lambda x: get_refs(x, LINE_MAP["DepositLineDetail.Entity.value"], customer_dict)
-    )
+    # UPDATED: handle Entity.type to choose customer vs vendor mapping (normalize type string)
+    def get_entity_refs(parent_id):
+        """
+        For each deposit (parent_id) inspect its lines' Entity.type and Entity.value.
+        - Normalize Entity.type (lowercase, whitespace removed)
+        - If 'customer' => use customer_dict to get target id
+        - If 'vendor'   => use vendor_dict to get target id
+        - Collect all found target ids and return as semicolon-separated string (unique, sorted)
+        """
+        if parent_id not in deposit_lines_grouped.groups:
+            return None
+
+        group = deposit_lines_grouped.get_group(parent_id)
+        col_type = LINE_MAP.get("DepositLineDetail.Entity.type")
+        col_value = LINE_MAP.get("DepositLineDetail.Entity.value")
+
+        targets = []
+        # iterate rows and decide mapping based on normalized type
+        for _, row in group[[col_type, col_value]].dropna(how='all').iterrows():
+            ent_type_raw = row.get(col_type, None) if col_type in group.columns else None
+            ent_val = row.get(col_value, None) if col_value in group.columns else None
+
+            if pd.isna(ent_val) or ent_val is None:
+                continue
+
+            # normalize type: remove whitespace and lower
+            normalized_type = None
+            if pd.notna(ent_type_raw) and ent_type_raw is not None:
+                try:
+                    normalized_type = "".join(str(ent_type_raw).split()).lower()
+                except Exception:
+                    normalized_type = str(ent_type_raw).lower()
+
+            # choose mapping dict by normalized_type
+            mapped = None
+            if normalized_type and "customer" in normalized_type:
+                if ent_val in customer_dict:
+                    mapped = customer_dict.get(ent_val)
+            elif normalized_type and "vendor" in normalized_type:
+                if ent_val in vendor_dict:
+                    mapped = vendor_dict.get(ent_val)
+            else:
+                # fallback: if type missing or unknown, try customer first then vendor (to preserve previous behavior)
+                if ent_val in customer_dict:
+                    mapped = customer_dict.get(ent_val)
+                elif ent_val in vendor_dict:
+                    mapped = vendor_dict.get(ent_val)
+
+            if mapped:
+                targets.append(str(mapped))
+
+        return ";".join(sorted(set(targets))) if targets else None
+
+    df["Mapped_EntityRefs"] = df["Id"].map(get_entity_refs)
+
     df["Mapped_AccountRefs"] = df["Id"].map(
         lambda x: get_refs(x, LINE_MAP["DepositLineDetail.AccountRef.value"], account_dict)
     )
@@ -261,7 +450,7 @@ def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12
         df["Mapped_TxnTaxCodeRef"] = df[source_tax_col].map(_map_taxcode)
     else:
         df["Mapped_TxnTaxCodeRef"] = None
-    
+
     #######################
 
     source_tax_col = "TxnTaxDetail.TaxLine[0].TaxLineDetail.TaxRateRef.value"
@@ -284,6 +473,7 @@ def ensure_mapping_table(DEPOSIT_DATE_FROM='1900-01-01',DEPOSIT_DATE_TO='2080-12
 
     sql.insert_invoice_map_dataframe(df, "Map_Deposit", MAPPING_SCHEMA)
     logger.info(f"✅ Inserted {len(df)} rows into {MAPPING_SCHEMA}.Map_Deposit")
+
 
 def apply_global_docnumber_strategy_for_deposit():
     apply_duplicate_docnumber_strategy_dynamic(

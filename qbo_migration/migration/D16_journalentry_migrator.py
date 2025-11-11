@@ -82,7 +82,7 @@ def apply_global_docnumber_strategy_for_journalentry():
     apply_duplicate_docnumber_strategy_dynamic(
         target_table="Map_JournalEntry",
         schema=MAPPING_SCHEMA,
-        check_against_tables=["Map_Bill", "Map_Invoice", "Map_VendorCredit", "Map_JournalEntry"],
+        check_against_tables=["Map_Bill", "Map_Invoice", "Map_VendorCredit","Map_Estimate","Map_CreditMemo","Map_SalesReceipt","Map_Purchase"],
     )
 
 def _table_exists(map_table: str) -> bool:

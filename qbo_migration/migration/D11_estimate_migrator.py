@@ -136,17 +136,43 @@ def load_mapping_caches(mapping_schema="porter_entities_mapping"):
             _ITEM_WITH_TARGET.add(ks)
         _MAP_ITEM_ACTIVE[ks] = (str(a).strip().lower() if a is not None else "")
 
-    _MAP_CLASS = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Class]"))
-    _MAP_TAX   = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_TaxCode]"))
-    _MAP_TAX_NAME = _to_dict_name(sql.fetch_all(f"SELECT Source_Id, Name FROM [{mapping_schema}].[Map_TaxCode]"))
-    _MAP_DEPT  = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Department]"))
+    # _MAP_CLASS = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Class]"))
+    # _MAP_TAX   = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_TaxCode]"))
+    # _MAP_TAX_NAME = _to_dict_name(sql.fetch_all(f"SELECT Source_Id, Name FROM [{mapping_schema}].[Map_TaxCode]"))
+    # _MAP_DEPT  = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Department]"))
+
+    # # Optional customer currency for validating CurrencyRef (still default off)
+    # try:
+    #     _MAP_CUST_CURR = _to_dict(sql.fetch_all(f"SELECT Source_Id, CurrencyRef_Target_Id FROM [{mapping_schema}].[Map_Customer]"))
+    # except Exception:
+    #     _MAP_CUST_CURR = {}
+
+ # Optional mappings (Class, TaxCode, Department)
+    try:
+        _MAP_CLASS = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Class]"))
+    except Exception:
+        _MAP_CLASS = {}
+
+    try:
+        _MAP_TAX = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_TaxCode]"))
+        _MAP_TAX_NAME = _to_dict_name(sql.fetch_all(f"SELECT Source_Id, Name FROM [{mapping_schema}].[Map_TaxCode]"))
+    except Exception:
+        _MAP_TAX = {}
+        _MAP_TAX_NAME = {}
+
+    try:
+        _MAP_DEPT = _to_dict(sql.fetch_all(f"SELECT Source_Id, Target_Id FROM [{mapping_schema}].[Map_Department]"))
+    except Exception:
+        _MAP_DEPT = {}
 
     # Optional customer currency for validating CurrencyRef (still default off)
     try:
-        _MAP_CUST_CURR = _to_dict(sql.fetch_all(f"SELECT Source_Id, CurrencyRef_Target_Id FROM [{mapping_schema}].[Map_Customer]"))
+        _MAP_CUST_CURR = _to_dict(
+            sql.fetch_all(f"SELECT Source_Id, CurrencyRef_Target_Id FROM [{mapping_schema}].[Map_Customer]")
+        )
     except Exception:
         _MAP_CUST_CURR = {}
-
+        
 def map_from_cache(cache: dict, src):
     return cache.get(_norm_id(src))
 

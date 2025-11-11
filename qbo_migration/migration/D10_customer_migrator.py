@@ -722,7 +722,7 @@ def post_staged_customers(level=None, phase=None):
 
             code, msg, det = _parse_qbo_error(r)
 
-            # Duplicate name → resolve using FQN-first
+            # 1) Duplicate name → resolve using FQN-first (existing logic)
             if str(code) == "6240" or (msg and "Duplicate Name" in msg):
                 existing_id = _recover_customer_id(payload, fqn_hint=fqn_hint)
                 if existing_id:
@@ -739,7 +739,32 @@ def post_staged_customers(level=None, phase=None):
                 timer.update()
                 continue
 
-            # Other errors → Failed
+            # 2) Project name conflict (business validation): treat like duplicate,
+            #    but if we cannot resolve an existing id, mark as Failed (and retry).
+            project_conflict_msg = (msg or "").lower()
+            if str(code) == "6000" or ("project" in project_conflict_msg and "already" in project_conflict_msg and "name" in project_conflict_msg):
+                logger.info(f"ℹ️ Project-name conflict for Source_Id={source_id}; attempting to resolve existing Id.")
+                existing_id = _recover_customer_id(payload, fqn_hint=fqn_hint)
+                if existing_id:
+                    update_mapping_status(
+                        mapping_schema, mapping_table, source_id,
+                        "Exists", target_id=existing_id, payload=payload
+                    )
+                    logger.info(f"✅ Resolved project-name conflict for Source_Id={source_id} -> Target_Id={existing_id}")
+                else:
+                    # If we couldn't resolve the target id, mark as Failed and allow retry.
+                    failure_text = f"code={code} | msg={msg} | detail={det} (project conflict; could not resolve Id)"
+                    update_mapping_status(
+                        mapping_schema, mapping_table, source_id,
+                        "Failed",
+                        failure_reason=failure_text,
+                        increment_retry=True
+                    )
+                    logger.warning(f"⚠️ Project-name conflict for Source_Id={source_id} and Id resolution failed. Marked as Failed for retry.")
+                timer.update()
+                continue
+
+            # 3) Other errors → Failed (unchanged)
             update_mapping_status(
                 mapping_schema, mapping_table, source_id,
                 "Failed",

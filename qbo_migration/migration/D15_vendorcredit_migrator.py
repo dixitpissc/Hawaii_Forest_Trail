@@ -385,7 +385,7 @@ def apply_duplicate_docnumber_strategy_for_vendorcredit():
     apply_duplicate_docnumber_strategy_dynamic(
         target_table="Map_VendorCredit",
         schema=MAPPING_SCHEMA,
-        check_against_tables=["Map_Invoice", "Map_CreditMemo", "Map_Bill","Map_VendorCredit"]
+        check_against_tables=[ "Map_Estimate","Map_Bill","Map_Purchase"] #,"Map_VendorCredit","Map_Invoice", "Map_CreditMemo",]
     )
 
 def build_payload(row, lines):
@@ -793,7 +793,7 @@ def post_vendorcredit(row):
         return
 
     try:
-        resp = session.post(url, headers=headers, json=payload, timeout=20)
+        resp =  session.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
             qid = (resp.json().get("VendorCredit") or {}).get("Id")
             if qid:

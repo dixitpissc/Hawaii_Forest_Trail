@@ -274,7 +274,7 @@ def post_vendor(row, auth_cache=None):
     
     # Optimized approach: Try to post first, handle duplicates in error response
     try:
-        response = session.post(post_url, headers=headers, data=payload_json)
+        response =session.post(post_url, headers=headers, data=payload_json)
         
         if response.status_code == 200:
             qbo_id = response.json()["Vendor"]["Id"]

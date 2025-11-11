@@ -36,7 +36,7 @@ def apply_global_docnumber_strategy_for_Purchase():
             apply_duplicate_docnumber_strategy_dynamic(
             target_table="Map_Purchase",
             schema=MAPPING_SCHEMA,
-            check_against_tables=["Map_Bill","Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit"]
+            check_against_tables=["Map_Bill"] #,"Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit"]
         )
 
 def get_qbo_auth():
@@ -403,10 +403,27 @@ def ensure_mapping_table(PURCHASE_DATE_FROM='1900-01-01',PURCHASE_DATE_TO='2080-
         return dict(zip(t["Source_Id"], t["Target_Id"])) if not t.empty else {}
 
     account_dict = load_map("Map_Account")
-    class_dict = load_map("Map_Class")
-    dept_dict = load_map("Map_Department")
+    # class_dict = load_map("Map_Class")
+    # dept_dict = load_map("Map_Department")
     item_dict = load_map("Map_Item")
-    payment_dict = load_map("Map_PaymentMethod")
+    # payment_dict = load_map("Map_PaymentMethod")
+
+    # Optional mappings — only load if table exists
+    if sql.table_exists("Map_Class", MAPPING_SCHEMA):
+        class_dict = load_map("Map_Class")
+    else:
+        class_dict = {}
+
+    if sql.table_exists("Map_Department", MAPPING_SCHEMA):
+        dept_dict = load_map("Map_Department")
+    else:
+        dept_dict = {}
+
+    if sql.table_exists("Map_PaymentMethod", MAPPING_SCHEMA):
+        payment_dict = load_map("Map_PaymentMethod")
+    else:
+        payment_dict = {}
+
 
     # NEW: TaxCode and TaxRate mapping (optional but preferred)
     taxcode_dict = load_map("Map_TaxCode") if sql.table_exists("Map_TaxCode", MAPPING_SCHEMA) else {}
@@ -490,18 +507,38 @@ def build_payload(row, lines):
     # Preload all mapping dicts
     account_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple())
     account_map = dict(zip(account_dict["Source_Id"], account_dict["Target_Id"])) if not account_dict.empty else {}
-    class_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
-    class_map = dict(zip(class_dict["Source_Id"], class_dict["Target_Id"])) if not class_dict.empty else {}
-    dept_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple())
-    dept_map = dict(zip(dept_dict["Source_Id"], dept_dict["Target_Id"])) if not dept_dict.empty else {}
+    # class_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
+    # class_map = dict(zip(class_dict["Source_Id"], class_dict["Target_Id"])) if not class_dict.empty else {}
+    # dept_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple())
+    # dept_map = dict(zip(dept_dict["Source_Id"], dept_dict["Target_Id"])) if not dept_dict.empty else {}
     item_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Item]", tuple())
     item_map = dict(zip(item_dict["Source_Id"], item_dict["Target_Id"])) if not item_dict.empty else {}
-    payment_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_PaymentMethod]", tuple())
-    payment_map = dict(zip(payment_dict["Source_Id"], payment_dict["Target_Id"])) if not payment_dict.empty else {}
+    # payment_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_PaymentMethod]", tuple())
+    # payment_map = dict(zip(payment_dict["Source_Id"], payment_dict["Target_Id"])) if not payment_dict.empty else {}
     customer_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Customer]", tuple())
     customer_map = dict(zip(customer_dict["Source_Id"], customer_dict["Target_Id"])) if not customer_dict.empty else {}
     vendor_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Vendor]", tuple())
     vendor_map = dict(zip(vendor_dict["Source_Id"], vendor_dict["Target_Id"])) if not vendor_dict.empty else {}
+    
+        # Optional mappings — only load if table exists
+    if sql.table_exists("Map_Class", MAPPING_SCHEMA):
+        class_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
+        class_map = dict(zip(class_dict["Source_Id"], class_dict["Target_Id"])) if not class_dict.empty else {}
+    else:
+        class_map = {}
+
+    if sql.table_exists("Map_Department", MAPPING_SCHEMA):
+        dept_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple())
+        dept_map = dict(zip(dept_dict["Source_Id"], dept_dict["Target_Id"])) if not dept_dict.empty else {}
+    else:
+        dept_map = {}
+
+    if sql.table_exists("Map_PaymentMethod", MAPPING_SCHEMA):
+        payment_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_PaymentMethod]", tuple())
+        payment_map = dict(zip(payment_dict["Source_Id"], payment_dict["Target_Id"])) if not payment_dict.empty else {}
+    else:
+        payment_map = {}
+    
     # Load employee mapping only if table exists
     if sql.table_exists("Map_Employee", MAPPING_SCHEMA):
         employee_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Employee]", tuple())
@@ -524,6 +561,8 @@ def build_payload(row, lines):
         doc_number = str(raw_doc).strip()
     payload = {
         "CurrencyRef": {"value": row.get("CurrencyRef.value", "USD") or "USD"},
+        "PrivateNote" : row.get("PrivateNote"),
+        "Credit" : row.get("Credit"),
         "Line": []
     }
     if doc_number:
@@ -878,7 +917,7 @@ def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_l
                     for (sid, payload) in chunk
                 ]
             }
-            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+            return  session.post(batch_url, headers=_headers, json=body, timeout=timeout)
 
         attempted_refresh = False
         for attempt in range(max_manual_retries + 1):

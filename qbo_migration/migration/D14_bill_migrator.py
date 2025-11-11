@@ -661,7 +661,7 @@ def apply_duplicate_docnumber_strategy_for_bills():
             docnumber_column="DocNumber",
             source_id_column="Source_Id",
             duplicate_column="Duplicate_DocNumber",
-            check_against_tables=["Map_Invoice", "Map_CreditMemo", "Map_Bill"]
+            check_against_tables=[]
         )
 
 # ---------------------------- PAYLOAD ----------------------------
@@ -1234,7 +1234,7 @@ def post_bill(row):
 
     url, headers = get_qbo_auth()
     try:
-        resp = session.post(url, headers=headers, json=payload, timeout=20)
+        resp =  session.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
             # qid = (resp.json().get("Bill") or {}).get("Id")
             # if qid:
