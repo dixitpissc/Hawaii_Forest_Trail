@@ -34,7 +34,7 @@ def apply_duplicate_docnumber_strategy():
     docnumber_column= "DocNumber",
     duplicate_column= "Duplicate_DocNumber",
     schema=MAPPING_SCHEMA,
-    check_against_tables=["Map_Bill","Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit","Map_Purchase","Map_Salesreceipt","Map_Refundreceipt","Map_Payment"])
+    check_against_tables=["Map_Estimate","Map_CreditMemo","Map_Bill","Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit","Map_Purchase","Map_Salesreceipt","Map_Refundreceipt","Map_Payment","Map_Purchase","Map_BillPayment"])
 
 def get_qbo_auth():
     env = os.getenv("QBO_ENVIRONMENT", "production")
@@ -581,7 +581,7 @@ def _apply_batch_updates_billpayment(successes, failures):
                 (reason, sid)
             )
 
-def _post_batch_billpayments(eligible_batch, url, headers, timeout=40, post_batch_limit=20, max_manual_retries=1):
+def _post_batch_billpayments(eligible_batch, url, headers, timeout=40, post_batch_limit=5, max_manual_retries=1):
     """
     Single-threaded batch poster for BillPayments:
     - Pre-decodes Payload_JSON once per row (orjson/json).
@@ -835,7 +835,7 @@ def resume_or_post_billpayments(BILLPAYMENT_DATE_FROM,BILLPAYMENT_DATE_TO):
 
     url, headers = get_qbo_auth()
     select_batch_size = 300   # DB slice size
-    post_batch_limit  = 20    # Items per QBO /batch call (≤30). Set to 3 if you want exactly three per call.
+    post_batch_limit  = 5    # Items per QBO /batch call (≤30). Set to 3 if you want exactly three per call.
     timeout           = 40
 
     total = len(eligible)
