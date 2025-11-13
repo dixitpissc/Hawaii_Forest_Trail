@@ -1,0 +1,20 @@
+"Id","LineNum","Description","Amount","DetailType","SalesItemLineDetail.ItemRef.value","SalesItemLineDetail.ItemRef.name","SalesItemLineDetail.UnitPrice","SalesItemLineDetail.Qty","SalesItemLineDetail.ItemAccountRef.value","SalesItemLineDetail.ItemAccountRef.name","SalesItemLineDetail.TaxCodeRef.value","Parent_Id","TxnDate","DocNumber","SalesItemLineDetail.ClassRef.value","SalesItemLineDetail.ClassRef.name","SalesItemLineDetail.ServiceDate","SalesItemLineDetail.TaxClassificationRef.value","Parent_Entity"
+"1","1.0","Anca Abbas- added on 1 guest day of tour, payment was not obtained- 263267408","195.55",SalesItemLineDetail,"23",FIT-TOURS RETAIL,"195.55","1.0","71","5000-02 FIT Tours",NON,"36190","2025-01-01","770722","842100",HFTCO,"2024-12-30",,CreditMemo
+,,,"195.55",SubTotalLineDetail,,,,,,,,"36190","2025-01-01","770722",,,,,CreditMemo
+"1","1.0",ACE Hardware Pd HFT for KOZI Tours,"942.99",SalesItemLineDetail,"51",KOZI Transfers,"942.99","1.0","18",Intercompany:Transfer Account - HFT/KOZI,NON,"36635","2025-01-21","770127-C","842103",KOZICO,,,CreditMemo
+,,,"942.99",SubTotalLineDetail,,,,,,,,"36635","2025-01-21","770127-C",,,,,CreditMemo
+"1","1.0",,"172.25",SalesItemLineDetail,"23",FIT-TOURS RETAIL,"172.25",,"71","5000-02 FIT Tours",NON,"37424","2025-02-20","780060","842103",KOZICO,"2025-01-31",,CreditMemo
+,,,"172.25",SubTotalLineDetail,,,,,,,,"37424","2025-02-20","780060",,,,,CreditMemo
+"1","1.0",,"0.0",SalesItemLineDetail,"23",FIT-TOURS RETAIL,,,"71","5000-02 FIT Tours",NON,"37444","2025-02-20","780062","842103",KOZICO,"2024-12-31",,CreditMemo
+,,,"0.0",SubTotalLineDetail,,,,,,,,"37444","2025-02-20","780062",,,,,CreditMemo
+"1","1.0",,"687.16",SalesItemLineDetail,"134",HFT Transfers,"687.16","1.0","18",Intercompany:Transfer Account - HFT/KOZI,NON,"37481","2025-01-01","780068","842103",KOZICO,"2024-08-31",,CreditMemo
+"2","2.0",,"939.28",SalesItemLineDetail,"134",HFT Transfers,"939.28","1.0","18",Intercompany:Transfer Account - HFT/KOZI,NON,"37481","2025-01-01","780068","842103",KOZICO,"2024-08-31",,CreditMemo
+,,,"1626.44",SubTotalLineDetail,,,,,,,,"37481","2025-01-01","780068",,,,,CreditMemo
+"1","1.0",Contitech,"1815.32",SalesItemLineDetail,"134",HFT Transfers,"1815.32","1.0","18",Intercompany:Transfer Account - HFT/KOZI,NON,"37569","2025-02-26","781442","842100",HFTCO,,,CreditMemo
+,,,"1815.32",SubTotalLineDetail,,,,,,,,"37569","2025-02-26","781442",,,,,CreditMemo
+"1","1.0",Refund for Wind Cancellation,"941.23",SalesItemLineDetail,"137",Groups-Tours,"941.23","1.0","72","5000-03 Group Tours",NON,"40262","2025-04-14","803390","842103",KOZICO,"2025-04-14",,CreditMemo
+,,,"941.23",SubTotalLineDetail,,,,,,,,"40262","2025-04-14","803390",,,,,CreditMemo
+"1","1.0","356114-1- Booked 2A &2C, error when rebooking to 4A","39.26",SalesItemLineDetail,"23",FIT-TOURS RETAIL,"39.26","1.0","71","5000-02 FIT Tours",NON,"42726","2025-05-30","356114-1","842100",HFTCO,"2025-05-30",,CreditMemo
+,,,"39.26",SubTotalLineDetail,,,,,,,,"42726","2025-05-30","356114-1",,,,,CreditMemo
+"1","1.0",,"322.45",SalesItemLineDetail,"63",Miscellaneous,"322.45","1.0","75","5000-08 Other Revenue",TAX,"44323","2025-03-31","827858","842100",HFTCO,"2025-03-31",EUC-99990202-V1-00020000,CreditMemo
+,,,"322.45",SubTotalLineDetail,,,,,,,,"44323","2025-03-31","827858",,,,,CreditMemo

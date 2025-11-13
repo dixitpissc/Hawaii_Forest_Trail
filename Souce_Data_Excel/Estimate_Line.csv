@@ -1,0 +1,50 @@
+"Id","LineNum","Description","Amount","DetailType","SalesItemLineDetail.ServiceDate","SalesItemLineDetail.ItemRef.value","SalesItemLineDetail.ItemRef.name","SalesItemLineDetail.ClassRef.value","SalesItemLineDetail.ClassRef.name","SalesItemLineDetail.UnitPrice","SalesItemLineDetail.UnitCostPrice","SalesItemLineDetail.Qty","SalesItemLineDetail.ItemAccountRef.value","SalesItemLineDetail.ItemAccountRef.name","SalesItemLineDetail.TaxCodeRef.value","CostAmount","HomeCostAmount","Parent_Id","TxnDate","DocNumber","Parent_Entity"
+"1","1.0",KW AM/PM,"5253.66",SalesItemLineDetail,"2025-05-29","137",Groups-Tours,"842100",HFTCO,"5253.66","7880.49","1.0","72","5000-03 Group Tours",NON,"7880.49","7880.49","40830","2025-04-25","1001",Estimate
+,,,"5253.66",SubTotalLineDetail,,,,,,,,,,,,,,"40830","2025-04-25","1001",Estimate
+"1","1.0",Canopy,"3771.99",SalesItemLineDetail,"2025-05-29","137",Groups-Tours,"842103",KOZICO,"3771.99","3771.99","1.0","72","5000-03 Group Tours",NON,"3771.99","3771.99","40832","2025-03-02","1002",Estimate
+,,,"3771.99",SubTotalLineDetail,,,,,,,,,,,,,,"40832","2025-03-02","1002",Estimate
+"1","1.0","25-LNH611","4825.12",SalesItemLineDetail,"2025-05-15","849",Services,"842100",HFTCO,"4825.12","4825.12",,"77","5000-12 Retail Store Revenue",NON,"4825.12","4825.12","40879","2025-04-25","1003",Estimate
+,,,"4825.12",SubTotalLineDetail,,,,,,,,,,,,,,"40879","2025-04-25","1003",Estimate
+"1","1.0","25-LNH611","3630.63",SalesItemLineDetail,"2025-05-15","137",Groups-Tours,"842103",KOZICO,"3630.63","3630.63","1.0","72","5000-03 Group Tours",NON,"3630.63","3630.63","40882","2025-05-15","1004",Estimate
+,,,"3630.63",SubTotalLineDetail,,,,,,,,,,,,,,"40882","2025-05-15","1004",Estimate
+"1","1.0",KW ,"12062.8",SalesItemLineDetail,"2025-05-09","137",Groups-Tours,"842100",HFTCO,"12062.8","12062.8","1.0","72","5000-03 Group Tours",NON,"12062.8","12062.8","41142","2025-04-16","59432",Estimate
+,,,"12062.8",SubTotalLineDetail,,,,,,,,,,,,,,"41142","2025-04-16","59432",Estimate
+"1","1.0",KW,"10654.96",SalesItemLineDetail,"2025-06-18","137",Groups-Tours,"842100",HFTCO,"10654.96","10654.96","1.0","72","5000-03 Group Tours",NON,"10654.96","10654.96","42301","2025-06-18","59433",Estimate
+,,,"10654.96",SubTotalLineDetail,,,,,,,,,,,,,,"42301","2025-06-18","59433",Estimate
+"1","1.0",Align Tech,"5296.34",SalesItemLineDetail,"2025-07-16","137",Groups-Tours,"842100",HFTCO,"5296.34",,"1.0","72","5000-03 Group Tours",NON,,,"44036","2025-07-16","59434",Estimate
+,,,"5296.34",SubTotalLineDetail,,,,,,,,,,,,,,"44036","2025-07-16","59434",Estimate
+"1","1.0",Align Tech,"3771.99",SalesItemLineDetail,"2025-07-16","137",Groups-Tours,"842103",KOZICO,"3771.99",,"1.0","72","5000-03 Group Tours",NON,,,"44150","2025-07-16","59435",Estimate
+,,,"3771.99",SubTotalLineDetail,,,,,,,,,,,,,,"44150","2025-07-16","59435",Estimate
+"1","1.0",Medtronic,"22271.87",SalesItemLineDetail,"2025-09-15","137",Groups-Tours,"842100",HFTCO,"22271.87",,"1.0","72","5000-03 Group Tours",NON,,,"44508","2025-09-15","59436",Estimate
+,,,"22271.87",SubTotalLineDetail,,,,,,,,,,,,,,"44508","2025-09-15","59436",Estimate
+"1","1.0",KCC,"2648.17",SalesItemLineDetail,"2025-08-06","79",Signature- Private Tours,"842100",HFTCO,"2648.17","2648.17","1.0","74","5000-05 Signature - Private Tours",NON,"2648.17","2648.17","45308","2025-02-18","59437",Estimate
+,,,"2648.17",SubTotalLineDetail,,,,,,,,,,,,,,"45308","2025-02-18","59437",Estimate
+"1","1.0",KW AM/PM,"11654.96",SalesItemLineDetail,"2025-08-20","137",Groups-Tours,"842100",HFTCO,"11654.96","11654.96","1.0","72","5000-03 Group Tours",NON,"11654.96","11654.96","45311","2025-02-27","59438",Estimate
+,,,"11654.96",SubTotalLineDetail,,,,,,,,,,,,,,"45311","2025-02-27","59438",Estimate
+"1","1.0",UGA,"8099.94",SalesItemLineDetail,"2026-01-25","137",Groups-Tours,"842100",HFTCO,"8099.94",,"1.0","72","5000-03 Group Tours",NON,,,"45815","2026-01-25","59439",Estimate
+"2","2.0",,"1753.29",SalesItemLineDetail,"2026-01-25","23",FIT-TOURS RETAIL,"842100",HFTCO,"1753.29",,"1.0","71","5000-02 FIT Tours",NON,,,"45815","2026-01-25","59439",Estimate
+,,,"9853.23",SubTotalLineDetail,,,,,,,,,,,,,,"45815","2026-01-25","59439",Estimate
+"1","1.0",,"25864.81",SalesItemLineDetail,"2025-09-18","137",Groups-Tours,"842100",HFTCO,"25864.81",,"1.0","72","5000-03 Group Tours",NON,,,"46417","2025-09-18","59440",Estimate
+,,,"25864.81",SubTotalLineDetail,,,,,,,,,,,,,,"46417","2025-09-18","59440",Estimate
+"1","1.0",Service Heroes,"23066.47",SalesItemLineDetail,"2025-10-23","137",Groups-Tours,"842100",HFTCO,"23066.47",,"1.0","72","5000-03 Group Tours",NON,,,"47037","2025-09-23","59441",Estimate
+,,,"23066.47",SubTotalLineDetail,,,,,,,,,,,,,,"47037","2025-09-23","59441",Estimate
+"1","1.0",Cisco 2025,"10592.68",SalesItemLineDetail,"2025-12-04","137",Groups-Tours,"842100",HFTCO,"10592.68",,"1.0","72","5000-03 Group Tours",NON,,,"47041","2025-12-04","59442",Estimate
+,,,"10592.68",SubTotalLineDetail,,,,,,,,,,,,,,"47041","2025-12-04","59442",Estimate
+"1","1.0",SMPA,"15334.44",SalesItemLineDetail,"2025-09-17","137",Groups-Tours,"842100",HFTCO,"15334.44",,"1.0","72","5000-03 Group Tours",NON,,,"47066","2025-09-17","59443",Estimate
+,,,"15334.44",SubTotalLineDetail,,,,,,,,,,,,,,"47066","2025-09-17","59443",Estimate
+"1","1.0",,"9853.23",SalesItemLineDetail,"2026-03-11","137",Groups-Tours,"842100",HFTCO,"9853.23",,"1.0","72","5000-03 Group Tours",NON,,,"47317","2026-03-11","59445",Estimate
+,,,"9853.23",SubTotalLineDetail,,,,,,,,,,,,,,"47317","2026-03-11","59445",Estimate
+"1","1.0",CIMAX,"12145.04",SalesItemLineDetail,"2025-10-21","137",Groups-Tours,"842100",HFTCO,"12145.04",,"1.0","72","5000-03 Group Tours",NON,,,"47922","2025-10-21","59446",Estimate
+,,,"12145.04",SubTotalLineDetail,,,,,,,,,,,,,,"47922","2025-10-21","59446",Estimate
+"1","1.0",Intuit,"7898.46",SalesItemLineDetail,"2025-10-15","137",Groups-Tours,"842100",HFTCO,"7898.46",,"1.0","72","5000-03 Group Tours",NON,,,"48056","2025-10-15","59447",Estimate
+,,,"7898.46",SubTotalLineDetail,,,,,,,,,,,,,,"48056","2025-10-15","59447",Estimate
+"1","1.0",Voyages Golf,"6072.52",SalesItemLineDetail,"2026-10-08","137",Groups-Tours,"842100",HFTCO,"6072.52",,"1.0","72","5000-03 Group Tours",NON,,,"48087","2025-10-08","59448",Estimate
+,,,"6072.52",SubTotalLineDetail,,,,,,,,,,,,,,"48087","2025-10-08","59448",Estimate
+"1","1.0",Netscout,"5922.52",SalesItemLineDetail,"2025-10-07","137",Groups-Tours,"842100",HFTCO,"5922.52",,"1.0","72","5000-03 Group Tours",NON,,,"48270","2025-10-07","59449",Estimate
+,,,"5922.52",SubTotalLineDetail,,,,,,,,,,,,,,"48270","2025-10-07","59449",Estimate
+"1","1.0",Shamrock Foods,"10507.32",SalesItemLineDetail,"2026-01-16","137",Groups-Tours,"842100",HFTCO,"10507.32",,"1.0","72","5000-03 Group Tours",NON,,,"49351","2025-10-16","59450",Estimate
+,,,"10507.32",SubTotalLineDetail,,,,,,,,,,,,,,"49351","2025-10-16","59450",Estimate
+"1","1.0",Cohesity,"7944.51",SalesItemLineDetail,"2025-11-20","137",Groups-Tours,"842100",HFTCO,"7944.51",,"1.0","72","5000-03 Group Tours",NON,,,"49526","2025-11-20","59451",Estimate
+,,,"7944.51",SubTotalLineDetail,,,,,,,,,,,,,,"49526","2025-11-20","59451",Estimate
+"1","1.0",MIT Hawaii 2026,"13996.2",SalesItemLineDetail,"2026-02-16","137",Groups-Tours,"842100",HFTCO,"13996.2",,"1.0","72","5000-03 Group Tours",NON,,,"49896","2026-02-16","59452",Estimate
+,,,"13996.2",SubTotalLineDetail,,,,,,,,,,,,,,"49896","2026-02-16","59452",Estimate
