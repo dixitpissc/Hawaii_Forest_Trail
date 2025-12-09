@@ -5,7 +5,7 @@ Created: 2025-09-02
 Description: Handles migration of PurchaseOrder records from source system to QBO.
 Production : Ready
 Development : Require when necessary
-Phase : 01
+Phase : 02 - Multi User
 """
 import os
 import json
@@ -15,8 +15,9 @@ from functools import lru_cache
 from dotenv import load_dotenv
 
 from storage.sqlserver import sql
-from utils.token_refresher import auto_refresh_token_if_needed, _should_refresh_token, refresh_qbo_token
+from utils.token_refresher import auto_refresh_token_if_needed, get_qbo_context_migration
 from utils.log_timer import global_logger as logger, ProgressTimer
+from utils.apply_duplicate_docnumber import apply_duplicate_docnumber_strategy_dynamic
 from config.mapping.purchaseorder_mapping import (
     PURCHASEORDER_HEADER_MAPPING,
     ITEM_BASED_EXPENSE_LINE_MAPPING,
@@ -119,47 +120,15 @@ def ensure_mapping_table():
 
 
 def apply_duplicate_docnumber_strategy():
-    """
-    Handle duplicate DocNumber in Map_PurchaseOrder.
-    """
-    logger.info("🔍 Detecting duplicate DocNumbers in Map_PurchaseOrder...")
-    sql.run_query(f"""
-        IF COL_LENGTH('{MAPPING_SCHEMA}.Map_PurchaseOrder', 'Duplicate_Docnumber') IS NULL
-        BEGIN
-          ALTER TABLE [{MAPPING_SCHEMA}].[Map_PurchaseOrder]
-          ADD Duplicate_Docnumber NVARCHAR(30);
-        END
-    """)
-
-    df = sql.fetch_table("Map_PurchaseOrder", MAPPING_SCHEMA)
-    df = df[df["DocNumber"].notna() & (df["DocNumber"].astype(str).str.strip().str.lower() != "null") & (df["DocNumber"].astype(str).str.strip() != "")]
-    df["DocNumber"] = df["DocNumber"].astype(str)
-
-    duplicates = df["DocNumber"].value_counts()
-    duplicates = duplicates[duplicates > 1].index.tolist()
-
-    for docnum in duplicates:
-        rows = df[df["DocNumber"] == docnum]
-        for i, (_, row) in enumerate(rows.iterrows(), start=1):
-            sid = row["Source_Id"]
-            new_docnum = f"{docnum}-{i:02d}" if len(docnum) <= 18 else f"{i:02d}{docnum[2:]}"[:21]
-            sql.run_query(f"""
-                UPDATE [{MAPPING_SCHEMA}].[Map_PurchaseOrder]
-                SET Duplicate_Docnumber = ?
-                WHERE Source_Id = ?
-            """, (new_docnum, sid))
-            logger.warning(f"⚠️ Duplicate DocNumber '{docnum}' updated to '{new_docnum}'")
-
-    uniques = df[~df["DocNumber"].isin(duplicates)]
-    for _, row in uniques.iterrows():
-        sid = row["Source_Id"]
-        sql.run_query(f"""
-            UPDATE [{MAPPING_SCHEMA}].[Map_PurchaseOrder]
-            SET Duplicate_Docnumber = ?
-            WHERE Source_Id = ?
-        """, (row["DocNumber"], sid))
-
-    logger.info("✅ Duplicate docnumber strategy applied.")
+    """Apply dynamic duplicate DocNumber handling like invoices/estimates."""
+    apply_duplicate_docnumber_strategy_dynamic(
+        target_table="Map_PurchaseOrder",
+        schema=MAPPING_SCHEMA,
+        docnumber_column="DocNumber",
+        source_id_column="Source_Id",
+        duplicate_column="Duplicate_Docnumber",
+        check_against_tables=["Map_Estimate","Map_CreditMemo","Map_Bill","Map_Invoice","Map_VendorCredit","Map_JournalEntry","Map_Deposit","Map_Purchase","Map_Salesreceipt","Map_Refundreceipt","Map_Payment","Map_Purchase","Map_BillPayment"]
+    )
 
 
 def get_lines(purchaseorder_id):
@@ -292,12 +261,12 @@ def build_payload(row, lines):
 
 
 def get_qbo_auth():
-    env = os.getenv("QBO_ENVIRONMENT", "sandbox")
-    base = "https://sandbox-quickbooks.api.intuit.com" if env == "sandbox" else "https://quickbooks.api.intuit.com"
-    realm = os.getenv("QBO_REALM_ID")
-    url = f"{base}/v3/company/{realm}/purchaseorder?minorversion={QBO_MINOR_VERSION}"
+    ctx = get_qbo_context_migration()
+    base = ctx["BASE_URL"]
+    realm = ctx["REALM_ID"]
+    url = f"{base}/v3/company/{realm}/purchaseorder"
     headers = {
-        "Authorization": f"Bearer {os.getenv('QBO_ACCESS_TOKEN')}",
+        "Authorization": f"Bearer {ctx['ACCESS_TOKEN']}",
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
@@ -383,8 +352,8 @@ def post_purchaseorder(row):
         logger.warning(f"⚠️ Skipped PurchaseOrder {sid} - missing Payload_JSON")
         return
 
-    if _should_refresh_token():
-        refresh_qbo_token()
+    # Ensure token is refreshed for multi-user context
+    auto_refresh_token_if_needed()
 
     url, headers = get_qbo_auth()
     payload = _normalize_qbo_body(row["Payload_JSON"])
