@@ -104,6 +104,7 @@ access_token = ctx['ACCESS_TOKEN']
 realm_id = ctx["REALM_ID"]
 
 environment = os.getenv("QBO_ENVIRONMENT", "sandbox")
+minor_version = os.getenv("QBO_MINOR_VERSION", "75")
 
 base_url = "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
 query_url = f"{base_url}/v3/company/{realm_id}/query"
@@ -240,15 +241,23 @@ def _qbo_select(query: str, fields: str = "*", startposition: int | None = None,
     if maxresults is not None:
         q += f" MAXRESULTS {maxresults}"
 
-    resp = session.get(
-        query_url,
-        headers=headers,
-        params={"query": q, "minorversion": "75"}
-    )
-    if resp.status_code != 200:
-        logger.warning(f"❌ QBO query failed")
+    try:
+        resp = session.get(
+            query_url,
+            headers=headers,
+            params={"query": q, "minorversion": minor_version}
+        )
+    except Exception as e:
+        logger.warning(f"❌ QBO query network error: {e} | q='{q}'")
         return []
-    return resp.json().get("QueryResponse", {}).get("Account", []) or []
+
+    if resp.status_code != 200:
+        body_snip = (resp.text or "")[:500]
+        logger.warning(f"❌ QBO query failed: {resp.status_code} | q='{q}' | body={body_snip}")
+        return []
+
+    data = resp.json()
+    return data.get("QueryResponse", {}).get("Account", []) or []
 
 # ---------- Add a helper to page through all Account records (safe fallback) ----------
 # def _fetch_all_accounts_pagewise(batch_size: int = 1000):
@@ -383,6 +392,25 @@ def _ensure_undeposited_funds_target(row) -> str | None:
     return acc["Id"]
 
 def _get_account_by_id(acc_id: str, fields: str = "Id, Name, Active, SyncToken"):
+    # Prefer direct Read by Id endpoint for reliability
+    try:
+        resp = session.get(
+            f"{base_url}/v3/company/{realm_id}/account/{acc_id}",
+            headers=headers,
+            params={"minorversion": minor_version}
+        )
+        if resp.status_code == 200:
+            j = resp.json() or {}
+            acc = j.get("Account")
+            if acc:
+                # If specific fields requested, let caller handle; we return full account
+                return acc
+        else:
+            logger.warning(f"⚠️ Read-by-ID failed: {resp.status_code} | id={acc_id} | body={(resp.text or '')[:300]}")
+    except Exception as e:
+        logger.warning(f"⚠️ Read-by-ID error: {e} | id={acc_id}")
+
+    # Fallback to query
     rows = _qbo_select(f"Id = '{acc_id}'", fields=fields)
     return rows[0] if rows else None
 

@@ -208,7 +208,7 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "taxrate",
         # "taxcode",
         # "vendor", 
-        # "customer", 
+        "customer", 
         # "employee",
         
         # # transactional

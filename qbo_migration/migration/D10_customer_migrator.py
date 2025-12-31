@@ -576,9 +576,13 @@ def stage_payloads_bulk(level=None, phase=None):
                None to process all customers
     """
     # Build WHERE clause based on level or phase
+    # Support sentinel level='ALL' to process all rows (no Level filter)
     where_clause = "WHERE Payload_JSON IS NULL"
-    
-    if level is None:
+
+    if level == 'ALL':
+        # No additional filter; process all rows
+        pass
+    elif level is None:
         where_clause += " AND ([Level] IS NULL)"
     elif level is not None:
         # Handle numeric levels (convert to string for SQL comparison)
@@ -677,9 +681,12 @@ def post_staged_customers(level=None, phase=None):
                None     to process all customers
     """
     # Build WHERE clause based on level or phase
+    # Support sentinel level='ALL' to process all rows (no Level filter)
     where_clause = "WHERE Porter_Status IN ('Ready','Failed') AND Payload_JSON IS NOT NULL"
 
-    if level is None:
+    if level == 'ALL':
+        pass
+    elif level is None:
         where_clause += " AND ([Level] IS NULL)"
     elif level is not None:
         where_clause += f" AND [Level] = '{level}'"
@@ -941,6 +948,35 @@ def migrate_customers_by_level():
     """
     logger.info("🏗️ Starting Level-Based Customer Migration")
     
+    # If the mapping table doesn't have a 'Level' column, bypass level-based
+    # migration and perform a flat (all-records) staging/posting flow.
+    try:
+        col_chk = sql.fetch_table_with_params(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            (mapping_schema, mapping_table, 'Level')
+        )
+        has_level_col = not col_chk.empty
+    except Exception:
+        has_level_col = False
+
+    if not has_level_col:
+        logger.info("ℹ️ 'Level' column not present — running flat (non-level) customer migration")
+        # Stage all payloads (no Level filtering)
+        stage_payloads_bulk(level='ALL')
+        # Post all staged customers
+        post_staged_customers(level='ALL')
+
+        # Retry failed customers once (as original logic does per-level)
+        retry_df, _ = get_retryable_subset(source_table, source_schema, mapping_table, mapping_schema, max_retries)
+        if not retry_df.empty:
+            logger.info("🔁 Retrying failed customer posts (flat mode)...")
+            post_staged_customers(level='ALL')
+
+        # Backfill parent ids once to align any children
+        backfill_target_parent_ids_into_map_customer()
+        logger.info("✅ Flat customer migration completed (no Level column)")
+        return
+
     # Get all levels in the correct order
     levels = get_customer_levels()
     
