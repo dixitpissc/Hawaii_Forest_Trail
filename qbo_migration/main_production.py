@@ -208,12 +208,12 @@ def run_full_migration(entities: Optional[List[str]] = None):
         # "taxrate",
         # "taxcode",
         # "vendor", 
-        "customer", 
+        # "customer", 
         # "employee",
         
         # # transactional
         
-        # "estimate",  # Fixed: lowercase to match registry key
+        "estimate",  # Fixed: lowercase to match registry key
         # "bill", 
         # "purchase", 
         # "vendorcredit", 

@@ -1,8 +1,9 @@
 """
 Sequence : 24
 Author: Dixit Prajapati
-Created: 2025-10-03
-Description: Handles migration of estimate records from source system to QBO.
+Created: 2025-12-31
+Description: Han
+dles migration of estimate records from source system to QBO.
 Production : Ready
 Development : Require when necessary
 Phase : 02 - MultiUser + Tax + Currency
@@ -30,6 +31,21 @@ QBO_TAX_MODEL    = os.getenv("QBO_TAX_MODEL", "US").upper()
 # By default we DO NOT send CurrencyRef or ExchangeRate to avoid multi-currency violation.
 QBO_ALLOW_CURRENCYREF = os.getenv("QBO_ALLOW_CURRENCYREF", "false").strip().lower() in ("1","true","yes")
 
+# Centralized QBO context logic (similar to class migrator)
+def get_qbo_auth_estimate():
+    """
+    Returns QBO API endpoints and headers for estimate migration using centralized context logic.
+    """
+    ctx = get_qbo_context_migration()
+    base = ctx["BASE_URL"]
+    realm_id = ctx["REALM_ID"]
+    post_url = f"{base}/v3/company/{realm_id}/estimate?minorversion=75"
+    headers = {
+        "Authorization": f"Bearer {ctx['ACCESS_TOKEN']}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    return post_url, headers
 
 # ──────────────────────────────────────────────────────────────
 # QBO auth
@@ -518,101 +534,376 @@ def log_missing_item_targetids(limit=25):
 # ──────────────────────────────────────────────────────────────
 session = requests.Session()
 
-def post_estimate(row):
-    sid = row["Source_Id"]
-    if row.get("Porter_Status") == "Success":
-        return
-    if int(row.get("Retry_Count") or 0) >= 5:
-        logger.warning(f"⚠️ Estimate {sid} skipped — exceeded retry limit")
-        return
-    if not row.get("Payload_JSON"):
-        logger.warning("Missing Payload_JSON — cannot post")
-        return
+# def post_estimate(row):
+#     sid = row["Source_Id"]
+#     if row.get("Porter_Status") == "Success":
+#         return
+#     if int(row.get("Retry_Count") or 0) >= 5:
+#         logger.warning(f"⚠️ Estimate {sid} skipped — exceeded retry limit")
+#         return
+#     if not row.get("Payload_JSON"):
+#         logger.warning("Missing Payload_JSON — cannot post")
+#         return
 
-    auto_refresh_token_if_needed()
+#     auto_refresh_token_if_needed()
 
-    url, headers = get_qbo_auth()
-    payload = json.loads(row["Payload_JSON"])
+#     url, headers = get_qbo_auth()
+#     payload = json.loads(row["Payload_JSON"])
 
-    try:
-        resp = session.post(url, headers=headers, json=payload)
-        if resp.status_code in (200, 201):
-            qid = (resp.json().get("Estimate") or {}).get("Id")
-            sql.run_query(f"""
-                UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
-                SET Target_Id = ?, Porter_Status='Success', Failure_Reason=NULL
-                WHERE Source_Id = ?
-            """, (qid, sid))
-            logger.info(f"✅ Estimate {sid} → QBO {qid}")
-        else:
-            reason = resp.text[:1000]
-            logger.error(f"❌ Estimate {sid} failed: {resp.status_code} {reason}")
-            sql.run_query(f"""
-                UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
-                SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=?
-                WHERE Source_Id = ?
-            """, (reason, sid))
-    except Exception as e:
-        logger.exception(f"❌ Exception posting Estimate {sid}")
-        sql.run_query(f"""
-            UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
-            SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=?
-            WHERE Source_Id = ?
-        """, (str(e), sid))
+#     try:
+#         resp = session.post(url, headers=headers, json=payload)
+#         if resp.status_code in (200, 201):
+#             qid = (resp.json().get("Estimate") or {}).get("Id")
+#             sql.run_query(f"""
+#                 UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
+#                 SET Target_Id = ?, Porter_Status='Success', Failure_Reason=NULL
+#                 WHERE Source_Id = ?
+#             """, (qid, sid))
+#             logger.info(f"✅ Estimate {sid} → QBO {qid}")
+#         else:
+#             reason = resp.text[:1000]
+#             logger.error(f"❌ Estimate {sid} failed: {resp.status_code} {reason}")
+#             sql.run_query(f"""
+#                 UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
+#                 SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=?
+#                 WHERE Source_Id = ?
+#             """, (reason, sid))
+#     except Exception as e:
+#         logger.exception(f"❌ Exception posting Estimate {sid}")
+#         sql.run_query(f"""
+#             UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
+#             SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=?
+#             WHERE Source_Id = ?
+#         """, (str(e), sid))
 
 # ──────────────────────────────────────────────────────────────
 # Entry points
 # ──────────────────────────────────────────────────────────────
+# def migrate_estimates():
+#     print("\n🚀 Starting Estimate Migration\n" + "=" * 36)
+#     load_mapping_caches(MAPPING_SCHEMA)
+#     ensure_mapping_table()
+#     # apply_duplicate_docnumber_strategy()
+#     apply_duplicate_docnumber_strategy_dynamic(
+#     target_table="Map_Estimate",
+#     schema=MAPPING_SCHEMA,
+#     docnumber_column="DocNumber",
+#     source_id_column="Source_Id",
+#     duplicate_column="Duplicate_Docnumber",
+#     check_against_tables=[]
+#     )
+#     load_mapping_caches(MAPPING_SCHEMA)
+#     log_missing_item_targetids()   # ← add this
+#     generate_estimate_payloads_in_batches(batch_size=POST_BATCH_SIZE)
+
+#     rows = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
+#     eligible = rows[rows["Porter_Status"].isin(["Ready", "Failed"])].reset_index(drop=True)
+#     if eligible.empty:
+#         logger.info("⚠️ No eligible estimates to process.")
+#         return
+
+#     pt = ProgressTimer(len(eligible))
+#     for _, row in eligible.iterrows():
+#         post_estimate(row)
+#         pt.update()
+
+#     print("\n🏁 Estimate migration completed.")
+
+# def resume_or_post_estimates():
+#     print("\n🔁 Resuming Estimate Migration (conditional mode)\n" + "=" * 52)
+
+#     if not sql.table_exists("Map_Estimate", MAPPING_SCHEMA):
+#         logger.info("📂 Map_Estimate missing — building fresh.")
+#         migrate_estimates()
+#         return
+
+#     mapped_df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
+#     source_df = sql.fetch_table("Estimate", SOURCE_SCHEMA)
+
+#     if len(mapped_df) != len(source_df):
+#         logger.warning(f"❌ Row count mismatch: Map_Estimate = {len(mapped_df)}, Source Estimate = {len(source_df)}")
+#         migrate_estimates()
+#         return
+
+#     if mapped_df["Payload_JSON"].isnull().any():
+#         logger.info("📦 Missing payloads — regenerating…")
+#         load_mapping_caches(MAPPING_SCHEMA)
+#         generate_estimate_payloads_in_batches(batch_size=POST_BATCH_SIZE)
+#         mapped_df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
+
+#     eligible = mapped_df[mapped_df["Porter_Status"].isin(["Ready", "Failed"])].reset_index(drop=True)
+#     if eligible.empty:
+#         logger.info("⚠️ No eligible estimates to post.")
+#         return
+
+#     logger.info("🚚 Posting Ready/Failed estimates…")
+#     pt = ProgressTimer(len(eligible))
+#     for _, row in eligible.iterrows():
+#         post_estimate(row)
+#         pt.update()
+
+#     print("\n🏁 Estimate posting completed.")
+
+
+# ============================ Shared Helpers ============================
+# Fast JSON loader (uses orjson if available)
+if "_fast_loads" not in globals():
+    try:
+        import orjson as _orjson
+        def _fast_loads(s):
+            if isinstance(s, dict):
+                return s
+            if isinstance(s, (bytes, bytearray)):
+                return _orjson.loads(s)
+            if isinstance(s, str):
+                return _orjson.loads(s.encode("utf-8"))
+            return s
+    except Exception:
+        import json as _json
+        def _fast_loads(s):
+            if isinstance(s, dict):
+                return s
+            if isinstance(s, (bytes, bytearray)):
+                return _json.loads(s.decode("utf-8")) if isinstance(s, (bytes, bytearray)) else _json.loads(s)
+            return s
+
+# Convert entity endpoint → /batch endpoint
+if "_derive_batch_url" not in globals():
+    def _derive_batch_url(entity_url: str, entity_name: str) -> str:
+        """
+        entity_url: https://.../v3/company/<realm>/<Entity>?minorversion=XX
+        entity_name: "Invoice" | "Bill" | "VendorCredit" | ...
+        -> https://.../v3/company/<realm>/batch?minorversion=XX
+        """
+        qpos = entity_url.find("?")
+        query = entity_url[qpos:] if qpos != -1 else ""
+        path = entity_url[:qpos] if qpos != -1 else entity_url
+
+        seg = f"/{entity_name}".lower()
+        lower = path.lower()
+        if lower.endswith(seg):
+            path = path[: -len(seg)]
+        return f"{path}/batch{query}"
+
+# Ensure a shared HTTP session exists
+try:
+    session
+except NameError:
+    import requests
+    session = requests.Session()
+
+
+def executemany(query: str, param_list):
+    if not param_list:
+        return
+    conn = sql.get_sqlserver_connection()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.fast_executemany = True
+        except Exception:
+            pass
+        cur.executemany(query, param_list)
+        conn.commit()
+    finally:
+        conn.close()
+ 
+
+def _post_batch_estimates(
+    eligible_batch,
+    url,
+    headers,
+    timeout=40,
+    post_batch_limit=10,
+    max_manual_retries=1
+):
+    successes, failures = [], []
+
+    if eligible_batch is None or eligible_batch.empty:
+        return successes, failures
+
+    work = []
+    for _, r in eligible_batch.iterrows():
+        sid = r["Source_Id"]
+
+        if r.get("Porter_Status") == "Success":
+            continue
+        if int(r.get("Retry_Count") or 0) >= 5:
+            continue
+
+        pj = r.get("Payload_JSON")
+        if not pj:
+            failures.append(("Missing Payload_JSON", sid))
+            continue
+
+        try:
+            payload = _fast_loads(pj)
+        except Exception as e:
+            failures.append((f"Bad JSON: {e}", sid))
+            continue
+
+        work.append((sid, payload))
+
+    if not work:
+        return successes, failures
+
+    batch_url = _derive_batch_url(url, "Estimate")
+
+    idx = 0
+    while idx < len(work):
+        auto_refresh_token_if_needed()
+        chunk = work[idx: idx + post_batch_limit]
+        idx += post_batch_limit
+
+        def _do_post(_headers):
+            body = {
+                "BatchItemRequest": [
+                    {"bId": str(sid), "operation": "create", "Estimate": payload}
+                    for sid, payload in chunk
+                ]
+            }
+            return session.post(batch_url, headers=_headers, json=body, timeout=timeout)
+
+        attempted_refresh = False
+        for _ in range(max_manual_retries + 1):
+            try:
+                resp = _do_post(headers)
+                sc = resp.status_code
+
+                if sc == 200:
+                    rj = resp.json()
+                    items = rj.get("BatchItemResponse", []) or []
+                    seen = set()
+
+                    for item in items:
+                        bid = item.get("bId")
+                        seen.add(bid)
+
+                        est = item.get("Estimate")
+                        if est and "Id" in est:
+                            successes.append((est["Id"], bid))
+                            logger.info(f"✅ Estimate {bid} → QBO {est['Id']}")
+                        else:
+                            fault = item.get("Fault", {})
+                            err = fault.get("Error", [{}])[0]
+                            reason = f"{err.get('Message','')} | {err.get('Detail','')}".strip()[:1000]
+                            failures.append((reason, bid))
+                            logger.error(f"❌ Estimate {bid} failed: {reason}")
+
+                    for sid, _ in chunk:
+                        if str(sid) not in seen:
+                            failures.append(("No response for bId", sid))
+                    break
+
+                elif sc in (401, 403) and not attempted_refresh:
+                    logger.warning("🔐 Token expired. Refreshing and retrying Estimate batch...")
+                    auto_refresh_token_if_needed()
+                    url, headers = get_qbo_auth_estimate()
+                    batch_url = _derive_batch_url(url, "Estimate")
+                    attempted_refresh = True
+                    continue
+
+                else:
+                    reason = (resp.text or f"HTTP {sc}")[:1000]
+                    for sid, _ in chunk:
+                        failures.append((reason, sid))
+                    break
+
+            except Exception as e:
+                for sid, _ in chunk:
+                    failures.append((f"Batch exception: {e}", sid))
+                break
+
+    return successes, failures
+
+
+def _apply_batch_updates_estimate(successes, failures):
+    if successes:
+        executemany(
+            f"""
+            UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
+            SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL
+            WHERE Source_Id=?
+            """,
+            [(qid, sid) for qid, sid in successes]
+        )
+
+    if failures:
+        executemany(
+            f"""
+            UPDATE [{MAPPING_SCHEMA}].[Map_Estimate]
+            SET Porter_Status='Failed',
+                Retry_Count = ISNULL(Retry_Count,0)+1,
+                Failure_Reason=?
+            WHERE Source_Id=?
+            """,
+            failures
+        )
+
+def post_estimate_batch(rows, post_batch_limit=10, timeout=40):
+    url, headers = get_qbo_auth_estimate()
+    successes, failures = _post_batch_estimates(
+        rows,
+        url,
+        headers,
+        timeout=timeout,
+        post_batch_limit=post_batch_limit
+    )
+    _apply_batch_updates_estimate(successes, failures)
+
 def migrate_estimates():
-    print("\n🚀 Starting Estimate Migration\n" + "=" * 36)
+    print("\n🚀 Starting Estimate Migration (batch mode)\n" + "=" * 45)
+
     load_mapping_caches(MAPPING_SCHEMA)
     ensure_mapping_table()
-    # apply_duplicate_docnumber_strategy()
-    apply_duplicate_docnumber_strategy_dynamic(
-    target_table="Map_Estimate",
-    schema=MAPPING_SCHEMA,
-    docnumber_column="DocNumber",
-    source_id_column="Source_Id",
-    duplicate_column="Duplicate_Docnumber",
-    check_against_tables=[]
-    )
-    load_mapping_caches(MAPPING_SCHEMA)
-    log_missing_item_targetids()   # ← add this
-    generate_estimate_payloads_in_batches(batch_size=POST_BATCH_SIZE)
 
-    rows = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
-    eligible = rows[rows["Porter_Status"].isin(["Ready", "Failed"])].reset_index(drop=True)
+    apply_duplicate_docnumber_strategy_dynamic(
+        target_table="Map_Estimate",
+        schema=MAPPING_SCHEMA,
+        docnumber_column="DocNumber",
+        source_id_column="Source_Id",
+        duplicate_column="Duplicate_Docnumber",
+        check_against_tables=[]
+    )
+
+    load_mapping_caches(MAPPING_SCHEMA)
+    log_missing_item_targetids()
+
+    generate_estimate_payloads_in_batches(batch_size=500)
+
+    mapped_df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
+    eligible = mapped_df[mapped_df["Porter_Status"].isin(["Ready", "Failed"])].reset_index(drop=True)
+
     if eligible.empty:
         logger.info("⚠️ No eligible estimates to process.")
         return
 
-    pt = ProgressTimer(len(eligible))
-    for _, row in eligible.iterrows():
-        post_estimate(row)
-        pt.update()
+    logger.info("🚚 Posting estimates using QBO batch API...")
+
+    select_batch_size = 100     # DB slice
+    post_batch_limit  = 10      # QBO batch items
+    timeout           = 40
+
+    for i in range(0, len(eligible), select_batch_size):
+        batch = eligible.iloc[i:i + select_batch_size]
+        post_estimate_batch(batch, post_batch_limit, timeout)
+
+        done = min(i + select_batch_size, len(eligible))
+        logger.info(f"⏱️ {done}/{len(eligible)} processed ({done*100//len(eligible)}%)")
 
     print("\n🏁 Estimate migration completed.")
 
 def resume_or_post_estimates():
-    print("\n🔁 Resuming Estimate Migration (conditional mode)\n" + "=" * 52)
+    print("\n🔁 Resuming Estimate Migration (batch mode)\n" + "=" * 52)
 
     if not sql.table_exists("Map_Estimate", MAPPING_SCHEMA):
-        logger.info("📂 Map_Estimate missing — building fresh.")
         migrate_estimates()
         return
 
     mapped_df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
-    source_df = sql.fetch_table("Estimate", SOURCE_SCHEMA)
-
-    if len(mapped_df) != len(source_df):
-        logger.warning(f"❌ Row count mismatch: Map_Estimate = {len(mapped_df)}, Source Estimate = {len(source_df)}")
-        migrate_estimates()
-        return
 
     if mapped_df["Payload_JSON"].isnull().any():
-        logger.info("📦 Missing payloads — regenerating…")
-        load_mapping_caches(MAPPING_SCHEMA)
-        generate_estimate_payloads_in_batches(batch_size=POST_BATCH_SIZE)
+        generate_estimate_payloads_in_batches(batch_size=500)
         mapped_df = sql.fetch_table("Map_Estimate", MAPPING_SCHEMA)
 
     eligible = mapped_df[mapped_df["Porter_Status"].isin(["Ready", "Failed"])].reset_index(drop=True)
@@ -620,10 +911,12 @@ def resume_or_post_estimates():
         logger.info("⚠️ No eligible estimates to post.")
         return
 
-    logger.info("🚚 Posting Ready/Failed estimates…")
-    pt = ProgressTimer(len(eligible))
-    for _, row in eligible.iterrows():
-        post_estimate(row)
-        pt.update()
+    select_batch_size = 100
+    post_batch_limit  = 10
+
+    for i in range(0, len(eligible), select_batch_size):
+        batch = eligible.iloc[i:i + select_batch_size]
+        post_estimate_batch(batch, post_batch_limit)
 
     print("\n🏁 Estimate posting completed.")
+# ============================ Main Production Edits ============================
