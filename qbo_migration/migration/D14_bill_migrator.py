@@ -2,7 +2,7 @@
 Sequence : 14
 Module: Bill_migrator.py (Optimized)
 Author: Dixit Prajapati
-Created: 2025-09-15
+Created: 2025-01-02
 Description: Handles migration of Bill records from QBO to QBO.
 Production : Ready
 Development : Require when necessary
@@ -166,6 +166,37 @@ def _norm_id(v):
 def _to_str_or_none(x):
     if pd.isna(x): return None
     return str(x)
+
+
+def _hdr_val_by_sourcecol(row, source_col):
+    """Return header value by source column name, supporting sanitized column names.
+
+    - `source_col` is the mapping value like 'VendorAddr.Line1' or 'Memo'.
+    - Tries the raw name first, then `sql.sanitize_column_name(source_col)`.
+    - Returns None for missing/NaN values.
+    """
+    if source_col is None:
+        return None
+    get = row.get if isinstance(row, dict) else row.__getitem__
+
+    v = None
+    try:
+        if (source_col in row) if isinstance(row, dict) else (source_col in row.index):
+            v = get(source_col)
+    except Exception:
+        v = None
+
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        s = sql.sanitize_column_name(source_col)
+        try:
+            if (s in row) if isinstance(row, dict) else (s in row.index):
+                v = get(s)
+        except Exception:
+            v = None
+
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    return v
 
 def _requests_session():
     # reuse session for speed
@@ -700,12 +731,13 @@ def build_payload(row: dict | pd.Series, lines_df: pd.DataFrame | None):
     for qbo_field, source_col in BILL_HEADER_MAPPING.items():
         if qbo_field in ("VendorRef.value", "APAccountRef.value", "DepartmentRef.value", "SalesTermRef.value"):
             continue
-        if source_col in row and pd.notna(get(source_col)):
+        v = _hdr_val_by_sourcecol(row, source_col)
+        if v is not None:
             if "." in qbo_field:
                 parent, child = qbo_field.split(".")
-                payload.setdefault(parent, {})[child] = get(source_col)
+                payload.setdefault(parent, {})[child] = v
             else:
-                payload[qbo_field] = get(source_col)
+                payload[qbo_field] = v
 
     # Optional: override DocNumber with deduped value if present
     if "Duplicate_DocNumber" in row and pd.notna(get("Duplicate_DocNumber")):

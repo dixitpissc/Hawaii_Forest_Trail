@@ -3,7 +3,7 @@
 Sequence : 18
 Module: Purchase_migrator.py
 Author: Dixit Prajapati
-Created: 2025-09-16
+Created: 2025-01-02
 Description: Handles migration of Purchase records from QBO to QBO.
 Production : Working 
 Development : Require when necessary
@@ -214,25 +214,45 @@ def insert_purchase_map_dataframe(df, table: str, schema: str = "dbo"):
         return dfx
 
     # ---- header-level enrichment ----
-    def map_payment_type(ptype):
-        if pd.isna(ptype):
-            return None
-        ptype_clean = str(ptype).replace(" ", "").lower()
-        return sql.fetch_single_value(
-            f"SELECT Target_Id FROM {MAPPING_SCHEMA}.Map_PaymentMethod WHERE REPLACE(LOWER(Name), ' ', '') = ?",
-            (ptype_clean,)
-        )
+    # Bulk-load mapping tables to avoid per-row SQL round-trips
+    import re
 
-    def map_account(source_id):
-        if pd.isna(source_id):
-            return None
-        return sql.fetch_single_value(
-            f"SELECT Target_Id FROM {MAPPING_SCHEMA}.Map_Account WHERE Source_Id=?",
-            (source_id,)
-        )
+    def _load_map_by_source(map_name):
+        if sql.table_exists(map_name, MAPPING_SCHEMA):
+            t = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[{map_name}]", tuple())
+            return {str(s): t for s, t in zip(t["Source_Id"], t["Target_Id"])} if not t.empty else {}
+        return {}
 
-    # Removed PaymentType mapping to Mapped_PaymentMethod (use PaymentType as-is)
-    df["Mapped_AccountRef"]  = df["AccountRef.value"].apply(map_account) if "AccountRef.value" in df.columns else None
+    # For payment mapping we need normalized name -> Target_Id mapping
+    payment_name_map = {}
+    if sql.table_exists("Map_PaymentMethod", MAPPING_SCHEMA):
+        pm = sql.fetch_table_with_params(f"SELECT Name, Target_Id FROM [{MAPPING_SCHEMA}].[Map_PaymentMethod]", tuple())
+        for n, t in zip(pm["Name"], pm["Target_Id"]):
+            if pd.notna(n):
+                key = re.sub(r"\s+", "", str(n).lower())
+                payment_name_map[key] = t
+
+    account_map = _load_map_by_source("Map_Account")
+    class_map = _load_map_by_source("Map_Class")
+    dept_map = _load_map_by_source("Map_Department")
+    item_map = _load_map_by_source("Map_Item")
+
+    # Map header-level account reference using dict
+    if "AccountRef.value" in df.columns:
+        df["Mapped_AccountRef"] = df["AccountRef.value"].map(lambda x: account_map.get(str(x)) if pd.notna(x) else None)
+    else:
+        df["Mapped_AccountRef"] = None
+
+    # Map payment type (by name) using preloaded name map
+    if "PaymentType" in df.columns:
+        def _map_ptype(p):
+            if pd.isna(p):
+                return None
+            key = re.sub(r"\s+", "", str(p).lower())
+            return payment_name_map.get(key)
+        df["Mapped_PaymentMethod"] = df["PaymentType"].map(_map_ptype)
+    else:
+        df["Mapped_PaymentMethod"] = None
 
     # ---- line-level enrichment ----
     enriched = {
@@ -248,21 +268,17 @@ def insert_purchase_map_dataframe(df, table: str, schema: str = "dbo"):
             values = line_df[[src_col, "Parent_Id"]].dropna().copy()
 
             mapping_table = {
-                "AccountRef": "Map_Account",
-                "ClassRef": "Map_Class",
-                "DepartmentRef": "Map_Department",
-                "ItemRef": "Map_Item",
+                "AccountRef": ("Map_Account", account_map),
+                "ClassRef": ("Map_Class", class_map),
+                "DepartmentRef": ("Map_Department", dept_map),
+                "ItemRef": ("Map_Item", item_map),
             }
             key = src_col.split(".")[-2]  # e.g., "AccountRef"
-            map_tbl = mapping_table.get(key)
+            map_entry = mapping_table.get(key)
 
-            if map_tbl:
-                values["Target"] = values[src_col].apply(
-                    lambda x: sql.fetch_single_value(
-                        f"SELECT Target_Id FROM {MAPPING_SCHEMA}.{map_tbl} WHERE Source_Id=?",
-                        (x,),
-                    )
-                )
+            if map_entry:
+                _, map_dict = map_entry
+                values["Target"] = values[src_col].map(lambda x: map_dict.get(str(x)) if pd.notna(x) else None)
                 merged = values.groupby("Parent_Id", as_index=False)["Target"].first()
                 merged.columns = ["Id", target_col]
                 df = df.merge(merged, on="Id", how="left")
@@ -270,7 +286,6 @@ def insert_purchase_map_dataframe(df, table: str, schema: str = "dbo"):
                 df[target_col] = None
         else:
             df[target_col] = None
-
     # ---- safe defaults (avoid tuple multi-assign) ----
     defaults = {
         "Target_Id": None,
@@ -502,19 +517,28 @@ def ensure_mapping_table(PURCHASE_DATE_FROM='1900-01-01',PURCHASE_DATE_TO='2080-
 def get_lines(purchase_id):
     return sql.fetch_table_with_params(f"SELECT * FROM {SOURCE_SCHEMA}.Purchase_Line WHERE Parent_Id=?", (purchase_id,))
 
+def _hdr_val(row, key):
+    """Return header value from row using mapping key `key` (e.g., 'RemitToAddr.Line1').
+
+    Tries the mapped source column name and the SQL-sanitized version used by the map table.
+    Returns None if missing or NaN.
+    """
+    mv = HEADER_MAP.get(key)
+    if mv is None:
+        return None
+    v = row.get(mv) if mv in row else row.get(sql.sanitize_column_name(mv)) if sql and hasattr(sql, 'sanitize_column_name') else row.get(mv)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    return v
+
+
 def build_payload(row, lines):
     # --- Optimized, index-based, mapping-dict-driven logic (like deposit) ---
     # Preload all mapping dicts
     account_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Account]", tuple())
     account_map = dict(zip(account_dict["Source_Id"], account_dict["Target_Id"])) if not account_dict.empty else {}
-    # class_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Class]", tuple())
-    # class_map = dict(zip(class_dict["Source_Id"], class_dict["Target_Id"])) if not class_dict.empty else {}
-    # dept_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple())
-    # dept_map = dict(zip(dept_dict["Source_Id"], dept_dict["Target_Id"])) if not dept_dict.empty else {}
     item_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Item]", tuple())
     item_map = dict(zip(item_dict["Source_Id"], item_dict["Target_Id"])) if not item_dict.empty else {}
-    # payment_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_PaymentMethod]", tuple())
-    # payment_map = dict(zip(payment_dict["Source_Id"], payment_dict["Target_Id"])) if not payment_dict.empty else {}
     customer_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Customer]", tuple())
     customer_map = dict(zip(customer_dict["Source_Id"], customer_dict["Target_Id"])) if not customer_dict.empty else {}
     vendor_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Vendor]", tuple())
@@ -526,7 +550,6 @@ def build_payload(row, lines):
         class_map = dict(zip(class_dict["Source_Id"], class_dict["Target_Id"])) if not class_dict.empty else {}
     else:
         class_map = {}
-
     if sql.table_exists("Map_Department", MAPPING_SCHEMA):
         dept_dict = sql.fetch_table_with_params(f"SELECT Source_Id, Target_Id FROM [{MAPPING_SCHEMA}].[Map_Department]", tuple())
         dept_map = dict(zip(dept_dict["Source_Id"], dept_dict["Target_Id"])) if not dept_dict.empty else {}
@@ -545,29 +568,6 @@ def build_payload(row, lines):
         employee_map = dict(zip(employee_dict["Source_Id"], employee_dict["Target_Id"])) if not employee_dict.empty else {}
     else:
         employee_map = {}
-
-    # Header fields
-    # raw_doc = row.get(HEADER_MAP.get("DocNumber"))
-    # dedup_doc = row.get("Duplicate_DocNumber")
-    # def _valid_docnumber(val):
-    #     if val is None:
-    #         return False
-    #     s = str(val).strip()
-    #     return s and s.lower() != "null"
-    # doc_number = None
-    # if _valid_docnumber(dedup_doc):
-    #     doc_number = str(dedup_doc).strip()
-    # elif _valid_docnumber(raw_doc):
-    #     doc_number = str(raw_doc).strip()
-    # payload = {
-    #     "CurrencyRef": {"value": row.get("CurrencyRef.value", "USD") or "USD"},
-    #     "PrivateNote" : row.get("PrivateNote"),
-    #     "Credit" : row.get("Credit"),
-    #     "TxnDate": row.get("TxnDate"),
-    #     "Line": []
-    # }
-    # if doc_number:
-    #     payload["DocNumber"] = doc_number
 
     # Header fields
     raw_doc = row.get(HEADER_MAP.get("DocNumber")) or row.get("DocNumber")
@@ -622,6 +622,31 @@ def build_payload(row, lines):
     payment_type = row.get("PaymentType")
     if pd.notna(payment_type):
         payload["PaymentType"] = payment_type
+
+    # If PaymentType == 'Check', include RemitToAddr fields when present
+    try:
+        if str(payment_type).strip().lower() == "check":
+            remit = {}
+            for k in [
+                "RemitToAddr.Line1", "RemitToAddr.Line2", "RemitToAddr.Line3",
+                "RemitToAddr.City", "RemitToAddr.Country", "RemitToAddr.CountrySubDivisionCode",
+                "RemitToAddr.PostalCode", "RemitToAddr.Lat", "RemitToAddr.Long",
+            ]:
+                v = _hdr_val(row, k)
+                if v is None:
+                    continue
+                sub = k.split('.', 1)[1]
+                if sub in ("Lat", "Long"):
+                    try:
+                        v = float(v)
+                    except Exception:
+                        pass
+                remit[sub] = v
+            if remit:
+                payload["RemitToAddr"] = remit
+    except Exception:
+        # keep migration robust — if anything unexpected, skip remit address
+        pass
     
     # Add header-level Credit if present
     credit_val = row.get("Credit")
@@ -1030,43 +1055,6 @@ def _post_batch_purchases(eligible_batch, url, headers, timeout=40, post_batch_l
 
     return successes, failures
 
-# def _apply_batch_updates_purchase(successes, failures):
-#     """
-#     Set-based updates for Map_Purchase; fast and idempotent.
-#     """
-#     try:
-
-#         if successes:
-#             executemany(
-#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-#                 f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
-#                 f"WHERE Source_Id=?",
-#                 [(qid, sid) for qid, sid in successes]
-#             )
-#         if failures:
-#             executemany(
-#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-#                 f"SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? "
-#                 f"WHERE Source_Id=?",
-#                 [(reason, sid) for reason, sid in failures]
-#             )
-#     except NameError:
-#         # Fallback to per-row updates if executemany helper is not available
-#         for qid, sid in successes or []:
-#             sql.run_query(
-#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-#                 f"SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL "
-#                 f"WHERE Source_Id=?",
-#                 (qid, sid)
-#             )
-#         for reason, sid in failures or []:
-#             sql.run_query(
-#                 f"UPDATE [{MAPPING_SCHEMA}].[Map_Purchase] "
-#                 f"SET Porter_Status='Failed', Retry_Count = ISNULL(Retry_Count,0)+1, Failure_Reason=? "
-#                 f"WHERE Source_Id=?",
-#                 (reason, sid)
-#             )
-
 def _apply_batch_updates_purchase(successes, failures):
     """
     Set-based updates for Map_Purchase; fast and idempotent.
@@ -1172,14 +1160,6 @@ def post_purchase(row):
     try:
         resp = session.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
-            # qid = (resp.json().get("Purchase") or {}).get("Id")
-            # if qid:
-            #     sql.run_query(
-            #         f"UPDATE {MAPPING_SCHEMA}.Map_Purchase SET Target_Id=?, Porter_Status='Success', Failure_Reason=NULL WHERE Source_Id=?",
-            #         (qid, row["Source_Id"])
-            #     )
-            #     logger.info(f"✅ Purchase {row['Source_Id']} → QBO {qid}")
-            #     return
             purchase_obj = (resp.json().get("Purchase") or {})
             qid = purchase_obj.get("Id")
             if qid:
@@ -1267,7 +1247,7 @@ def migrate_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO,retry_only=False):
         return
 
     url, headers = get_qbo_auth()
-    select_batch_size = 300   # DB slice size
+    select_batch_size = 100   # DB slice size
     post_batch_limit  = 8    # items per QBO batch call (<=30). Set to 3 for exactly-3-at-a-time.
     timeout           = 40
 
@@ -1316,7 +1296,7 @@ def resume_or_post_purchases(PURCHASE_DATE_FROM,PURCHASE_DATE_TO):
         return
 
     url, headers = get_qbo_auth()
-    select_batch_size = 300
+    select_batch_size = 100
     post_batch_limit  = 8
     timeout           = 40
 
@@ -1390,7 +1370,7 @@ def smart_purchase_migration(PURCHASE_DATE_FROM, PURCHASE_DATE_TO):
             return
 
         url, headers = get_qbo_auth()
-        select_batch_size = 300
+        select_batch_size = 100
         post_batch_limit  = 8
         timeout           = 40
 

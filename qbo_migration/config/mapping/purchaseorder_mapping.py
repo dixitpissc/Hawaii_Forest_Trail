@@ -14,15 +14,28 @@ PURCHASEORDER_HEADER_MAPPING = {
     "VendorRef.value": "VendorRef.value",           # map from Map_Vendor
     "VendorRef.name": "VendorRef.name",
     "Id": "Id",
+    "PrivateNote": "PrivateNote",
+    # "ExchangeRate": "ExchangeRate",
     # Address fields: full structure mapped as needed
-    "ShipAddr.Line1": "ShipAddr_Line1",
-    "ShipAddr.Line2": "ShipAddr_Line2",
-    "ShipAddr.Line3": "ShipAddr_Line3",
-    "ShipAddr.Line4": "ShipAddr_Line4",
-    "VendorAddr.Line1": "VendorAddr_Line1",
-    "VendorAddr.Line2": "VendorAddr_Line2",
-    "VendorAddr.Line3": "VendorAddr_Line3",
-    "VendorAddr.Line4": "VendorAddr_Line4"
+    "ShipAddr.Line1": "ShipAddr.Line1",
+    "ShipAddr.Line2": "ShipAddr.Line2",
+    "ShipAddr.Line3": "ShipAddr.Line3",
+    "ShipAddr.Line4": "ShipAddr.Line4",
+    "ShipAddr.Line5": "ShipAddr.Line5",
+    "ShipAddr.City": "ShipAddr.City",
+    "ShipAddr.Country": "ShipAddr.Country",
+    "ShipAddr.CountrySubDivisionCode": "ShipAddr.CountrySubDivisionCode",
+    "ShipAddr.PostalCode": "ShipAddr.PostalCode",
+    "VendorAddr.Line1": "VendorAddr.Line1",
+    "VendorAddr.Line2": "VendorAddr.Line2",
+    "VendorAddr.Line3": "VendorAddr.Line3",
+    "VendorAddr.Line4": "VendorAddr.Line4",
+    "VendorAddr.Line5": "VendorAddr.Line5",
+    "VendorAddr.City": "VendorAddr.City",
+    "VendorAddr.Country": "VendorAddr.Country",
+    "VendorAddr.CountrySubDivisionCode": "VendorAddr.CountrySubDivisionCode",
+    "VendorAddr.PostalCode": "VendorAddr.PostalCode",
+
     # Add more fields if your source includes others used by QBO PO
 }
 

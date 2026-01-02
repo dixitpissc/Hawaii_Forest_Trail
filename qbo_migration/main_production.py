@@ -114,6 +114,9 @@ def Deposit_Tporter():
 def Purchase_Tporter():
     return _lazy_call("porter_initiator.x_18_purchase_initiator", "initiating_purchase_migration")
 
+def PurchaseOrder_Tporter():
+    return _lazy_call("porter_initiator.x_25_purchaseorder_initiator", "initiating_PurchaseOrder_migration")
+
 def SalesReceipt_Tporter():
     return _lazy_call("porter_initiator.x_19_salesreceipt_initiator", "initiating_salesreceipt_migration")
 
@@ -165,6 +168,7 @@ _ENTITY_REGISTRY: Dict[str, Callable[[], Optional[object]]] = {
     "journalentry": JournalEntry_Tporter,
     "deposit": Deposit_Tporter,
     "purchase": Purchase_Tporter,
+    "purchaseorder": PurchaseOrder_Tporter,
     "salesreceipt": SalesReceipt_Tporter,
     "refundreceipt": RefundReceipts_Tporter,
     "payment": Payment_Tporter,
@@ -213,7 +217,8 @@ def run_full_migration(entities: Optional[List[str]] = None):
         
         # # transactional
         
-        "estimate",  # Fixed: lowercase to match registry key
+        # "estimate",  # Fixed: lowercase to match registry key
+        # "purchaseorder",
         # "bill", 
         # "purchase", 
         # "vendorcredit", 

@@ -15,7 +15,17 @@ BILL_HEADER_MAPPING = {
     "DocNumber": "DocNumber",
     "DueDate": "DueDate",
     "SalesTermRef.value": "SalesTermRef.value",
-    "PrivateNote": "Memo"
+    "PrivateNote": "Memo",
+    "VendorAddr.Line1": "VendorAddr.Line1",
+    "VendorAddr.Line2": "VendorAddr.Line2",
+    "VendorAddr.Line3": "VendorAddr.Line3",
+    "VendorAddr.Line4": "VendorAddr.Line4",
+    "VendorAddr.Line5": "VendorAddr.Line5",
+    "VendorAddr.City": "VendorAddr.City",
+    "VendorAddr.Country": "VendorAddr.Country",
+    "VendorAddr.CountrySubDivisionCode": "VendorAddr.CountrySubDivisionCode",
+    "VendorAddr.PostalCode": "VendorAddr.PostalCode",
+    "TotalAmt": "TotalAmt"
 }
 
 

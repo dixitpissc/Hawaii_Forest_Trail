@@ -20,6 +20,8 @@ PURCHASE_HEADER_MAPPING = {
     "RemitToAddr.Country": "RemitToAddr.Country",
     "RemitToAddr.CountrySubDivisionCode": "RemitToAddr.CountrySubDivisionCode",
     "RemitToAddr.PostalCode": "RemitToAddr.PostalCode",
+    "RemitToAddr.Lat": "RemitToAddr.Lat",
+    "RemitToAddr.Long": "RemitToAddr.Long",
 
     # Optional metadata (not posted, but retained for traceability)
     # "Id": "Id",
