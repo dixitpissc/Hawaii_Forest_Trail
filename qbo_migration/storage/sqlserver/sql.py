@@ -529,12 +529,17 @@ def ensure_column_exists(table: str, column: str, col_type: str = "NVARCHAR(MAX)
 def fetch_all(query: str, params: tuple = ()) -> list:
     """
     Executes a query and returns all rows as a list of tuples.
+    - If the SQL is not a query (DDL/INSERT/UPDATE), it will commit and return an empty list instead of raising.
     Useful for building mapping dictionaries.
     """
     with get_sqlserver_connection(USERID) as conn:
         conn.timeout = _DEFAULT_QUERY_TIMEOUT
         with conn.cursor() as cursor:
             _retryable(cursor.execute, query, params)
+            # If there's no result set (e.g., DDL/INSERT), cursor.description will be None
+            if cursor.description is None:
+                conn.commit()
+                return []
             rows = cursor.fetchall()
     return rows
 

@@ -3,10 +3,17 @@ porter_migration_main.py
 
 Usage:
     # Import this module anywhere without triggering work:
-    from porter_migration_main import run_full_migration, run_entity, Payment_Method_Tporter
+    from porter_migration_main import run_full_migration, run_entity, Payment_Method_Tporter, run_tracker
+
+    # Start the migration live tracker (long-running loop):
+    from porter_migration_main import run_tracker
 
     # Run the full migration sequence (when executed directly):
     python porter_migration_main.py
+
+    # CLI examples:
+    #   Start the long-running watchdog: python porter_migration_main.py --watchdog
+    #   Run a subset of entities: python porter_migration_main.py --entities customer invoice payment
 
     # Or call a single entity from another module:
     Payment_Method_Tporter()
@@ -21,7 +28,53 @@ Design:
 from typing import Callable, Dict, Optional, List
 import importlib
 import traceback
+import argparse
+import threading
 from utils.log_timer import global_logger as logger
+
+# Import watchdog functions non-lazily so we can run a one-shot refresh at startup and start the background monitor.
+from Watchdog.migration_live_tracker import run_tracker, refresh_migration_tracker
+
+# Background watchdog thread management
+_watchdog_thread: Optional[threading.Thread] = None
+_watchdog_lock = threading.Lock()
+
+
+def start_watchdog_background(daemon: bool = True) -> threading.Thread:
+    """Start the long-running migration tracker in a background thread.
+
+    If a background tracker is already running, this is a no-op and the existing thread is returned.
+    """
+    global _watchdog_thread
+    with _watchdog_lock:
+        if _watchdog_thread and _watchdog_thread.is_alive():
+            logger.debug("Watchdog background thread already running")
+            return _watchdog_thread
+
+        logger.info("Starting migration live tracker in background thread")
+        t = threading.Thread(target=run_tracker, daemon=daemon, name="migration_live_tracker")
+        t.start()
+        _watchdog_thread = t
+        return t
+
+# Watchdog functions are imported non-lazily above.
+# Use a one-shot runner at startup or for testing that performs a single refresh without blocking.
+def run_tracker_once():
+    """Run a single refresh of the migration tracker (safe, non-blocking)."""
+    logger.info("Running migration tracker one-shot (refresh_migration_tracker)")
+    refresh_migration_tracker()
+
+
+def run_tracker_background_once():
+    """Ensure the background tracker is running and perform an immediate refresh.
+
+    This is handy for startup: it creates the background thread once and immediately refreshes status.
+    """
+    start_watchdog_background()
+    try:
+        refresh_migration_tracker()
+    except Exception:
+        logger.exception("Initial one-shot refresh failed after starting background tracker")
 
 # Optional: clear_cache is imported only when needed by functions to avoid side-effects on import
 # from storage.sqlserver.sql import clear_cache  # DO NOT import at module-level to keep imports lazy
@@ -174,6 +227,8 @@ _ENTITY_REGISTRY: Dict[str, Callable[[], Optional[object]]] = {
     "payment": Payment_Tporter,
     "billpayment": BillPayment_Tporter,
     "transfer": Transfer_Tporter,
+    "migration_tracker": run_tracker_once,
+    "watchdog": run_tracker_once,
 }
 
 def run_entity(entity_key: str):
@@ -181,7 +236,15 @@ def run_entity(entity_key: str):
     Run a migration for an entity by short name (case-insensitive).
     Returns the entity function's return value.
     Raises KeyError if unknown.
+
+    Ensures the background migration tracker is running (so monitoring is available for single-entity runs).
     """
+    # Ensure the background tracker is running so users have live visibility even for single entities
+    try:
+        start_watchdog_background()
+    except Exception:
+        logger.exception("Failed to ensure background watchdog before running entity")
+
     key = entity_key.strip().lower()
     if key not in _ENTITY_REGISTRY:
         raise KeyError(f"Unknown entity key '{entity_key}'. Valid keys: {sorted(_ENTITY_REGISTRY.keys())}")
@@ -192,12 +255,19 @@ def run_entity(entity_key: str):
         raise
 
 # --- Full migration orchestration -------------------------------------------
-def run_full_migration(entities: Optional[List[str]] = None):
+def run_full_migration(entities: Optional[List[str]] = None, start_watchdog: bool = False):
     """
     Runs the migration sequence.
     - If entities is None -> runs a sensible default sequence (masters first, then transactions).
     - If entities is a list of entity keys (e.g. ['term','account','vendor']), runs only those in order.
+    - If start_watchdog is True, starts the migration live tracker in a background daemon thread.
     """
+    # Optionally start the migration live tracker in a background daemon thread.
+    if start_watchdog:
+        logger.info("Starting migration live tracker in background (daemon thread).")
+        t = threading.Thread(target=run_tracker, daemon=True)
+        t.start()
+
     # default canonical sequence (masters first, then transactional)
     default_sequence = [
         # "payment_method", 
@@ -263,12 +333,28 @@ def run_full_migration(entities: Optional[List[str]] = None):
 
 # --- CLI entrypoint ---------------------------------------------------------
 if __name__ == "__main__":
-    # Running as script for convenience: run the full default sequence.
+    parser = argparse.ArgumentParser(description="Porter migration runner")
+    parser.add_argument('--watchdog', action='store_true', help='Start migration live tracker (blocks)')
+    parser.add_argument('--start-watchdog', action='store_true', help='Start migration live tracker in background while running migrations (kept for backward compatibility)')
+    parser.add_argument('--no-watchdog', action='store_true', help='Do not start the background migration live tracker')
+    parser.add_argument('--entities', nargs='*', help='List of entity keys to run instead of default sequence')
+    args = parser.parse_args()
+
     try:
-        res = run_full_migration()
-        logger.info("Migration results summary:")
-        for entity, info in res.items():
-            logger.info(f" - {entity}: {info.get('status')}")
+        if args.watchdog:
+            logger.info("Starting migration live tracker (watchdog). Use Ctrl+C to stop.")
+            try:
+                run_tracker()
+            except KeyboardInterrupt:
+                logger.info("Migration live tracker interrupted by user.")
+        else:
+            # Start background tracker by default unless explicitly disabled by --no-watchdog
+            if not args.no_watchdog:
+                run_tracker_background_once()
+            res = run_full_migration(entities=args.entities if args.entities else None, start_watchdog=args.start_watchdog)
+            logger.info("Migration results summary:")
+            for entity, info in res.items():
+                logger.info(f" - {entity}: {info.get('status')}")
     except Exception as exc:
         logger.error(f"Migration terminated with error: {exc}")
         raise
